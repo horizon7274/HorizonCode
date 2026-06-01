@@ -1,7 +1,6 @@
-"""Configuration layer for HorizonCode.
+"""HorizonCode 配置层。
 
-Loads YAML configuration from user-level and project-level paths,
-with environment variable substitution and multi-profile support.
+从用户级和项目级路径加载 YAML 配置，支持环境变量替换和多 profile。
 """
 
 import os
@@ -11,20 +10,26 @@ from typing import Any
 
 import yaml
 
-# ── constants ──────────────────────────────────────────────────────────────
+# ── 常量 ────────────────────────────────────────────────────────────────────
+
 USER_CONFIG_DIR = Path.home() / ".horizoncode"
 USER_CONFIG_PATH = USER_CONFIG_DIR / "config.yaml"
 LOCAL_CONFIG_PATH = Path.cwd() / ".horizoncode" / "config.yaml"
 PROJECT_CONFIG_PATH = Path.cwd() / "horizoncode.yaml"
 
+# Profile 必填字段
 REQUIRED_FIELDS = {"protocol", "model", "base_url", "api_key"}
+# 环境变量引用模式: ${VAR_NAME}
 ENV_VAR_PATTERN = re.compile(r"\$\{(\w+)\}")
 
-# ── helpers ────────────────────────────────────────────────────────────────
+# ── 内部辅助 ────────────────────────────────────────────────────────────────
 
 
 def _substitute_env_vars(value: str) -> str:
-    """Replace ``${ENV_VAR}`` patterns in *value* with environment variable values."""
+    """将字符串中的 ``${ENV_VAR}`` 模式替换为环境变量的值。
+
+    如果环境变量不存在，保留原始模式不做替换。
+    """
     if not isinstance(value, str):
         return value
 
@@ -36,7 +41,7 @@ def _substitute_env_vars(value: str) -> str:
 
 
 def _deep_substitute(obj: Any) -> Any:
-    """Recursively substitute env vars in all string values."""
+    """递归替换对象中所有字符串值里的环境变量引用。"""
     if isinstance(obj, str):
         return _substitute_env_vars(obj)
     if isinstance(obj, dict):
@@ -47,7 +52,7 @@ def _deep_substitute(obj: Any) -> Any:
 
 
 def _deep_merge(base: dict, override: dict) -> dict:
-    """Recursively merge *override* into *base*. Override values take precedence."""
+    """递归将 *override* 合并到 *base*，override 中的值优先。"""
     result = dict(base)
     for key, value in override.items():
         if key in result and isinstance(result[key], dict) and isinstance(value, dict):
@@ -58,37 +63,38 @@ def _deep_merge(base: dict, override: dict) -> dict:
 
 
 def _validate_profile(name: str, profile: dict) -> None:
-    """Raise ``ValueError`` if *profile* is missing required fields."""
+    """校验 profile 是否包含所有必填字段，缺少则抛出 ``ValueError``。"""
     if not isinstance(profile, dict):
         raise ValueError(
-            f"Profile '{name}' must be a mapping, got {type(profile).__name__}"
+            f"Profile '{name}' 必须是一个映射，收到了 {type(profile).__name__}"
         )
     missing = REQUIRED_FIELDS - set(profile.keys())
     if missing:
         raise ValueError(
-            f"Profile '{name}' is missing required field(s): {', '.join(sorted(missing))}"
+            f"Profile '{name}' 缺少必填字段: {', '.join(sorted(missing))}"
         )
 
 
-# ── public API ─────────────────────────────────────────────────────────────
+# ── 公开 API ────────────────────────────────────────────────────────────────
 
 
 def load_config(project_path: Path | None = None) -> dict:
-    """Load and return the merged HorizonCode configuration.
+    """加载并返回合并后的 HorizonCode 配置。
 
-    Resolution order (later overrides earlier):
-        1. ``~/.horizoncode/config.yaml`` (user-level)
-        2. ``./.horizoncode/config.yaml`` (local project config)
-        3. ``./horizoncode.yaml`` (project-level)
-        4. *project_path* if explicitly provided (takes highest priority)
+    加载顺序（后者覆盖前者）:
+        1. ``~/.horizoncode/config.yaml``（用户级）
+        2. ``./.horizoncode/config.yaml``（项目本地配置）
+        3. ``./horizoncode.yaml``（项目级）
+        4. 通过 ``-c`` 显式指定的 *project_path*（最高优先级）
 
-    Returns a dict with keys:
-        - ``default_profile``: name of the active profile
-        - ``profiles``: dict of profile_name → {protocol, model, base_url, api_key}
+    Returns:
+        字典，包含:
+        - ``default_profile``: 当前激活的 profile 名称
+        - ``profiles``: profile 名 → {protocol, model, base_url, api_key} 的映射
     """
     config: dict = {"profiles": {}}
 
-    # 1. user-level
+    # 1. 用户级配置
     if USER_CONFIG_PATH.exists():
         raw = _read_yaml(USER_CONFIG_PATH)
     else:
@@ -98,7 +104,7 @@ def load_config(project_path: Path | None = None) -> dict:
     if "default_profile" in raw:
         config["default_profile"] = raw["default_profile"]
 
-    # 2. local project config (./.horizoncode/config.yaml)
+    # 2. 项目本地配置 (./.horizoncode/config.yaml)
     if LOCAL_CONFIG_PATH.exists():
         local_raw = _read_yaml(LOCAL_CONFIG_PATH)
         local_profiles = local_raw.get("profiles", {})
@@ -106,7 +112,7 @@ def load_config(project_path: Path | None = None) -> dict:
         if "default_profile" in local_raw:
             config["default_profile"] = local_raw["default_profile"]
 
-    # 3. project-level (./horizoncode.yaml or explicit -c)
+    # 3. 项目级配置 (./horizoncode.yaml 或 -c 指定)
     proj_path = project_path or PROJECT_CONFIG_PATH
     if proj_path.exists():
         proj_raw = _read_yaml(proj_path)
@@ -115,12 +121,12 @@ def load_config(project_path: Path | None = None) -> dict:
         if "default_profile" in proj_raw:
             config["default_profile"] = proj_raw["default_profile"]
 
-    # Substitute env vars and validate
+    # 替换环境变量并校验
     config["profiles"] = _deep_substitute(user_profiles)
     for name, profile in config["profiles"].items():
         _validate_profile(name, profile)
 
-    # Set default_profile if not specified
+    # 未指定 default_profile 时使用第一个 profile
     if "default_profile" not in config and config["profiles"]:
         config["default_profile"] = next(iter(config["profiles"]))
 
@@ -128,28 +134,28 @@ def load_config(project_path: Path | None = None) -> dict:
 
 
 def get_active_profile(config: dict) -> dict:
-    """Return the currently active profile dict from *config*.
+    """从 *config* 中返回当前激活的 profile 字典。
 
-    Raises ``ValueError`` if no profiles are configured or the default_profile
-    doesn't exist.
+    Raises:
+        ValueError: 没有配置任何 profile，或 default_profile 不存在时。
     """
     profiles: dict = config.get("profiles", {})
     if not profiles:
-        raise ValueError("No profiles configured. Add at least one profile in config.yaml.")
+        raise ValueError("没有配置任何 profile，请在 config.yaml 中添加至少一个 profile。")
 
     default = config.get("default_profile")
     if default is None:
         default = next(iter(profiles))
     if default not in profiles:
         raise ValueError(
-            f"Default profile '{default}' not found in configured profiles: "
-            f"{', '.join(sorted(profiles))}"
+            f"默认 profile '{default}' 在配置中不存在，"
+            f"可用的 profile: {', '.join(sorted(profiles))}"
         )
     return {**profiles[default], "name": default}
 
 
 def _read_yaml(path: Path) -> dict:
-    """Read a YAML file and return the parsed dict (or empty dict on empty file)."""
+    """读取 YAML 文件并返回解析后的字典（空文件返回空字典）。"""
     with open(path, "r", encoding="utf-8") as fh:
         data = yaml.safe_load(fh)
     return data if data is not None else {}

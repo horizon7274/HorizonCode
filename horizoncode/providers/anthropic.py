@@ -1,6 +1,6 @@
-"""Anthropic Claude provider — SSE streaming with extended thinking support.
+"""Anthropic Claude Provider —— 基于 SSE 的流式响应，支持 extended thinking。
 
-Uses the Anthropic Messages API (``/v1/messages``) with ``stream=True``.
+调用 Anthropic Messages API（``/v1/messages``），``stream=True``。
 """
 
 import json
@@ -13,25 +13,36 @@ from horizoncode.providers.base import BaseProvider, StreamFrame, register_provi
 
 logger = logging.getLogger(__name__)
 
-# ── constants ──────────────────────────────────────────────────────────────
+# ── 常量 ────────────────────────────────────────────────────────────────────
 
 ANTHROPIC_VERSION = "2023-06-01"
 DEFAULT_MAX_TOKENS = 4096
 THINKING_BUDGET_TOKENS = 2048
 
 
-# ── provider ───────────────────────────────────────────────────────────────
+# ── Provider ────────────────────────────────────────────────────────────────
 
 
 class AnthropicProvider(BaseProvider):
-    """Provider for the Anthropic Claude API with extended thinking support."""
+    """Anthropic Claude API 的 Provider 实现，支持 extended thinking。
+
+    通过 SSE 流式解析响应，将原始事件映射为统一的 StreamFrame 帧序列。
+    支持通过 base_url 指向 Anthropic 兼容代理（如智谱 GLM）。
+    """
 
     def __init__(self, api_key: str, base_url: str) -> None:
+        """初始化 Anthropic Provider。
+
+        Args:
+            api_key: API 认证密钥（x-api-key）。
+            base_url: API 基础 URL，尾部斜杠会被自动去除。
+        """
         self._api_key = api_key
         self._base_url = base_url.rstrip("/")
         self._client: httpx.AsyncClient | None = None
 
     async def _get_client(self) -> httpx.AsyncClient:
+        """获取或创建复用的 httpx 异步客户端。"""
         if self._client is None:
             self._client = httpx.AsyncClient(
                 timeout=httpx.Timeout(60.0, connect=10.0),
@@ -46,9 +57,17 @@ class AnthropicProvider(BaseProvider):
     async def stream_chat(
         self, messages: list[dict], model: str
     ) -> AsyncIterator[StreamFrame]:
-        """Stream a chat completion from the Anthropic Messages API."""
+        """向 Anthropic Messages API 发起流式聊天请求。
 
-        # Detect if model supports extended thinking (Sonnet 4+, Opus 4+)
+        解析 SSE 事件流，区分 thinking_delta（思考过程）和 text_delta（正文），
+        映射为对应的 StreamFrame 帧。所有异常都被捕获并以 error 帧返回。
+
+        Args:
+            messages: 统一格式的消息列表。
+            model: 模型名称（如 ``claude-sonnet-4-6``）。
+        """
+
+        # 检测模型是否支持 extended thinking（Sonnet 4+、Opus 4+）
         enable_thinking = _should_enable_thinking(model)
 
         body = {
@@ -75,15 +94,16 @@ class AnthropicProvider(BaseProvider):
                     error_text = await response.aread()
                     yield StreamFrame(
                         type="error",
-                        text=f"Anthropic API error ({response.status_code}): {_summarize_error(error_text)}",
+                        text=f"Anthropic API 错误 ({response.status_code}): {_summarize_error(error_text)}",
                     )
                     return
 
+                # 逐行解析 SSE 流
                 async for line in response.aiter_lines():
                     if not line:
                         continue
 
-                    # SSE format: "event: <type>" then "data: <json>"
+                    # SSE 格式: "event: <type>" 后跟 "data: <json>"
                     if line.startswith("event: "):
                         event_type = line[7:].strip()
                         continue
@@ -95,14 +115,14 @@ class AnthropicProvider(BaseProvider):
                     try:
                         data = json.loads(data_str)
                     except json.JSONDecodeError:
-                        logger.debug("Failed to parse SSE data: %s", data_str[:100])
+                        logger.debug("SSE 数据解析失败: %s", data_str[:100])
                         continue
 
-                    # Handle ping events
+                    # 跳过 ping 心跳事件
                     if isinstance(data, dict) and data.get("type") == "ping":
                         continue
 
-                    # Handle content_block_delta
+                    # 处理内容增量事件
                     if isinstance(data, dict) and data.get("type") == "content_block_delta":
                         delta = data.get("delta", {})
                         delta_type = delta.get("type", "")
@@ -120,7 +140,7 @@ class AnthropicProvider(BaseProvider):
                                 raw=data,
                             )
 
-                    # Handle error event
+                    # 处理 API 返回的错误事件
                     if isinstance(data, dict) and data.get("type") == "error":
                         yield StreamFrame(
                             type="error",
@@ -132,54 +152,54 @@ class AnthropicProvider(BaseProvider):
         except httpx.ConnectError as exc:
             yield StreamFrame(
                 type="error",
-                text=f"Connection failed — check network and base_url: {exc}",
+                text=f"连接失败 —— 请检查网络和 base_url: {exc}",
             )
         except httpx.TimeoutException:
             yield StreamFrame(
                 type="error",
-                text="Request timed out — the model may be busy, please retry.",
+                text="请求超时 —— 模型可能繁忙，请重试。",
             )
         except Exception as exc:
-            logger.exception("Unexpected error in Anthropic provider")
+            logger.exception("Anthropic Provider 发生未预期错误")
             yield StreamFrame(
                 type="error",
-                text=f"Unexpected error: {exc}",
+                text=f"未预期错误: {exc}",
             )
 
     async def close(self) -> None:
-        """Close the underlying HTTP client."""
+        """关闭底层 HTTP 客户端，释放连接资源。"""
         if self._client is not None:
             await self._client.aclose()
             self._client = None
 
 
-# ── helpers ────────────────────────────────────────────────────────────────
+# ── 辅助函数 ────────────────────────────────────────────────────────────────
 
 
 def _should_enable_thinking(model: str) -> bool:
-    """Determine whether extended thinking should be enabled for a given model.
+    """判断给定模型是否应启用 extended thinking。
 
-    Enabled for models known to support thinking (Claude 3.5 Sonnet+, Opus 4+, Sonnet 4+).
-    Disabled for Haiku models and unknown models.
+    对已知支持 thinking 的模型（Claude 3.5 Sonnet+、Opus 4+、Sonnet 4+）返回 True，
+    对 Haiku、Claude 3 Opus 及未知模型返回 False。
     """
     model_lower = model.lower()
-    # Haiku doesn't support thinking
+    # Haiku 不支持 thinking
     if "haiku" in model_lower:
         return False
-    # Claude 3 Opus doesn't support thinking
+    # Claude 3 Opus 不支持 thinking
     if model_lower.startswith("claude-3-opus"):
         return False
-    # Claude 3.5 Sonnet and later, Claude 4 models all support it
+    # Claude 3.5 Sonnet 及更高版本、Claude 4 系列均支持
     if "claude-3-5" in model_lower:
         return True
     if "claude-4" in model_lower or "claude-opus-4" in model_lower or "claude-sonnet-4" in model_lower:
         return True
-    # For unknown/anthropic-compatible models, default to off (safer)
+    # 未知模型 / 兼容代理默认关闭（更安全）
     return False
 
 
 def _summarize_error(body: bytes) -> str:
-    """Extract a readable error message from the response body."""
+    """从 API 响应的 body 中提取可读的错误信息。"""
     try:
         data = json.loads(body)
         if isinstance(data, dict):
@@ -193,6 +213,6 @@ def _summarize_error(body: bytes) -> str:
     return text
 
 
-# ── registration ───────────────────────────────────────────────────────────
+# ── 注册 ────────────────────────────────────────────────────────────────────
 
 register_provider("anthropic", AnthropicProvider)

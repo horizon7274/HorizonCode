@@ -62,7 +62,7 @@ class TestValidateProfile:
         })
 
     def test_missing_field_raises(self):
-        with pytest.raises(ValueError, match="missing"):
+        with pytest.raises(ValueError, match="缺少必填字段"):
             _validate_profile("bad", {
                 "protocol": "openai",
                 "model": "gpt-4o",
@@ -120,7 +120,7 @@ class TestLoadConfig:
         original = cfg.USER_CONFIG_PATH
         cfg.USER_CONFIG_PATH = config_file
         try:
-            with pytest.raises(ValueError, match="missing"):
+            with pytest.raises(ValueError, match="缺少必填字段"):
                 load_config(project_path=tmp_path / "nonexistent.yaml")
         finally:
             cfg.USER_CONFIG_PATH = original
@@ -181,11 +181,11 @@ class TestGetActiveProfile:
         assert profile["name"] == "main"
 
     def test_no_profiles_raises(self):
-        with pytest.raises(ValueError, match="No profiles"):
+        with pytest.raises(ValueError, match="没有配置任何 profile"):
             get_active_profile({"profiles": {}})
 
     def test_unknown_default_raises(self):
-        with pytest.raises(ValueError, match="not found"):
+        with pytest.raises(ValueError, match="不存在"):
             get_active_profile({
                 "default_profile": "nonexistent",
                 "profiles": {

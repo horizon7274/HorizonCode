@@ -1,7 +1,7 @@
-"""OpenAI provider — SSE streaming via Chat Completions API.
+"""OpenAI Provider —— 基于 SSE 的 Chat Completions API 流式调用。
 
-Uses the OpenAI Chat Completions API (``/v1/chat/completions``) with ``stream=True``.
-Compatible with OpenAI-compatible proxies (Azure, local models, etc.).
+调用 OpenAI Chat Completions API（``/v1/chat/completions``），``stream=True``。
+兼容 OpenAI 协议代理（Azure、本地模型等）。
 """
 
 import json
@@ -14,23 +14,33 @@ from horizoncode.providers.base import BaseProvider, StreamFrame, register_provi
 
 logger = logging.getLogger(__name__)
 
-# ── constants ──────────────────────────────────────────────────────────────
+# ── 常量 ────────────────────────────────────────────────────────────────────
 
 DEFAULT_MAX_TOKENS = 4096
 
 
-# ── provider ───────────────────────────────────────────────────────────────
+# ── Provider ────────────────────────────────────────────────────────────────
 
 
 class OpenAIProvider(BaseProvider):
-    """Provider for the OpenAI Chat Completions API (and compatible proxies)."""
+    """OpenAI Chat Completions API 的 Provider 实现，兼容 OpenAI 协议代理。
+
+    解析 SSE 事件流（``data: [DONE]`` 终止），将每个 delta 映射为 StreamFrame。
+    """
 
     def __init__(self, api_key: str, base_url: str) -> None:
+        """初始化 OpenAI Provider。
+
+        Args:
+            api_key: API 认证密钥（Bearer token）。
+            base_url: API 基础 URL（如 ``https://api.openai.com/v1``）。
+        """
         self._api_key = api_key
         self._base_url = base_url.rstrip("/")
         self._client: httpx.AsyncClient | None = None
 
     async def _get_client(self) -> httpx.AsyncClient:
+        """获取或创建复用的 httpx 异步客户端。"""
         if self._client is None:
             self._client = httpx.AsyncClient(
                 timeout=httpx.Timeout(60.0, connect=10.0),
@@ -44,7 +54,12 @@ class OpenAIProvider(BaseProvider):
     async def stream_chat(
         self, messages: list[dict], model: str
     ) -> AsyncIterator[StreamFrame]:
-        """Stream a chat completion from the OpenAI Chat Completions API."""
+        """向 OpenAI Chat Completions API 发起流式聊天请求。
+
+        Args:
+            messages: 统一格式的消息列表。
+            model: 模型名称（如 ``gpt-4o``）。
+        """
 
         body = {
             "model": model,
@@ -64,15 +79,16 @@ class OpenAIProvider(BaseProvider):
                     error_text = await response.aread()
                     yield StreamFrame(
                         type="error",
-                        text=f"OpenAI API error ({response.status_code}): {_summarize_error(error_text)}",
+                        text=f"OpenAI API 错误 ({response.status_code}): {_summarize_error(error_text)}",
                     )
                     return
 
+                # 逐行解析 SSE 流
                 async for line in response.aiter_lines():
                     if not line:
                         continue
 
-                    # SSE format: "data: <json>" or "data: [DONE]"
+                    # SSE 格式: "data: <json>" 或 "data: [DONE]"
                     if not line.startswith("data: "):
                         continue
 
@@ -85,10 +101,10 @@ class OpenAIProvider(BaseProvider):
                     try:
                         data = json.loads(data_str)
                     except json.JSONDecodeError:
-                        logger.debug("Failed to parse SSE data: %s", data_str[:100])
+                        logger.debug("SSE 数据解析失败: %s", data_str[:100])
                         continue
 
-                    # Extract content delta
+                    # 提取 content delta
                     choices = data.get("choices", [])
                     if choices:
                         delta = choices[0].get("delta", {})
@@ -100,38 +116,38 @@ class OpenAIProvider(BaseProvider):
                                 raw=data,
                             )
 
-                # If we exit the loop without [DONE], still signal done
+                # 如果循环正常结束但未收到 [DONE]，仍然发送完成信号
                 yield StreamFrame(type="done")
 
         except httpx.ConnectError as exc:
             yield StreamFrame(
                 type="error",
-                text=f"Connection failed — check network and base_url: {exc}",
+                text=f"连接失败 —— 请检查网络和 base_url: {exc}",
             )
         except httpx.TimeoutException:
             yield StreamFrame(
                 type="error",
-                text="Request timed out — the model may be busy, please retry.",
+                text="请求超时 —— 模型可能繁忙，请重试。",
             )
         except Exception as exc:
-            logger.exception("Unexpected error in OpenAI provider")
+            logger.exception("OpenAI Provider 发生未预期错误")
             yield StreamFrame(
                 type="error",
-                text=f"Unexpected error: {exc}",
+                text=f"未预期错误: {exc}",
             )
 
     async def close(self) -> None:
-        """Close the underlying HTTP client."""
+        """关闭底层 HTTP 客户端，释放连接资源。"""
         if self._client is not None:
             await self._client.aclose()
             self._client = None
 
 
-# ── helpers ────────────────────────────────────────────────────────────────
+# ── 辅助函数 ────────────────────────────────────────────────────────────────
 
 
 def _summarize_error(body: bytes) -> str:
-    """Extract a readable error message from the response body."""
+    """从 API 响应 body 中提取可读的错误信息。"""
     try:
         data = json.loads(body)
         if isinstance(data, dict):
@@ -147,6 +163,6 @@ def _summarize_error(body: bytes) -> str:
     return text
 
 
-# ── registration ───────────────────────────────────────────────────────────
+# ── 注册 ────────────────────────────────────────────────────────────────────
 
 register_provider("openai", OpenAIProvider)

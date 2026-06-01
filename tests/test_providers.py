@@ -29,7 +29,7 @@ class TestGetProvider:
         assert isinstance(p, OpenAIProvider)
 
     def test_unknown_protocol_raises(self):
-        with pytest.raises(ValueError, match="Unknown protocol"):
+        with pytest.raises(ValueError, match="未知协议"):
             get_provider("unknown", api_key="sk-test", base_url="http://localhost")
 
 

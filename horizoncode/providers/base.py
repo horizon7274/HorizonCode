@@ -1,24 +1,23 @@
-"""Abstract provider interface for LLM backends.
+"""LLM 后端的抽象 Provider 接口。
 
-Defines the contract that every provider must implement, plus a factory
-function that returns the correct provider for a given protocol.
+定义了每个 Provider 必须实现的契约，以及根据协议名创建 Provider 实例的工厂函数。
 """
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import AsyncIterator
 
-# ── data structures ────────────────────────────────────────────────────────
+# ── 数据结构 ────────────────────────────────────────────────────────────────
 
 
 @dataclass
 class StreamFrame:
-    """A single chunk emitted during streaming.
+    """流式响应中的单个数据帧。
 
-    Attributes:
-        type: One of ``"thinking"``, ``"content"``, ``"error"``, ``"done"``.
-        text: The text payload (empty for ``done`` frames, error message for ``error``).
-        raw: Optional provider-specific raw data (for debugging / logging).
+    属性:
+        type: 帧类型，取值为 ``"thinking"``、``"content"``、``"error"``、``"done"``。
+        text: 文本内容（``done`` 帧为空，``error`` 帧为错误信息）。
+        raw: Provider 返回的原始数据（用于调试/日志）。
     """
 
     type: str  # "thinking" | "content" | "error" | "done"
@@ -26,79 +25,78 @@ class StreamFrame:
     raw: object = None
 
 
-# ── abstract interface ─────────────────────────────────────────────────────
+# ── 抽象接口 ────────────────────────────────────────────────────────────────
 
 
 class BaseProvider(ABC):
-    """Abstract base class for LLM providers.
+    """LLM Provider 抽象基类。
 
-    Every provider must implement :meth:`stream_chat`, which accepts a list
-    of messages and the model name, and returns an async iterator of
-    :class:`StreamFrame` objects.
+    每个 Provider 必须实现 :meth:`stream_chat` 方法，接收消息列表和模型名称，
+    返回 :class:`StreamFrame` 的异步迭代器。
 
-    **Message format** (consistent across all providers)::
+    **统一消息格式**（所有 Provider 通用）::
 
         [
-            {"role": "system", "content": "..."},   # optional
+            {"role": "system", "content": "..."},   # 可选
             {"role": "user", "content": "..."},
             {"role": "assistant", "content": "..."},
             ...
         ]
 
-    **Expected frame sequence**::
+    **帧序列约定**::
 
         thinking*  content*  done
-        or:  (thinking|content)*  error
+        或:  (thinking|content)*  error
 
-    Subclasses should catch all exceptions and emit them as ``error`` frames
-    rather than letting them propagate — the TUI layer should never crash due
-    to an API failure.
+    子类应捕获所有异常并以 ``error`` 帧形式返回，不应让异常向上传播——
+    TUI 层不应因 API 调用失败而崩溃。
     """
 
     @abstractmethod
     async def stream_chat(
         self, messages: list[dict], model: str
     ) -> AsyncIterator[StreamFrame]:
-        """Stream a chat completion for the given *messages*.
+        """对流式聊天请求，逐帧返回响应。
 
         Args:
-            messages: List of message dicts with ``role`` and ``content`` keys.
-            model: The model name to use (provider-specific).
+            messages: 消息字典列表，每个字典含 ``role`` 和 ``content`` 键。
+            model: 要使用的模型名称（Provider 相关）。
 
         Yields:
-            :class:`StreamFrame` instances as the response is generated.
+            :class:`StreamFrame` 实例，随响应生成逐个产出。
         """
         ...
 
 
-# ── factory ────────────────────────────────────────────────────────────────
+# ── 工厂函数 ────────────────────────────────────────────────────────────────
 
+# Provider 注册表：协议名 → Provider 类
 _PROVIDER_REGISTRY: dict[str, type[BaseProvider]] = {}
 
 
 def register_provider(protocol: str, provider_cls: type[BaseProvider]) -> None:
-    """Register a provider class for the given *protocol* string."""
+    """将 Provider 类注册到指定协议名。"""
     _PROVIDER_REGISTRY[protocol] = provider_cls
 
 
 def get_provider(protocol: str, api_key: str, base_url: str) -> BaseProvider:
-    """Create and return a provider instance for the given *protocol*.
+    """根据协议名创建对应的 Provider 实例。
 
     Args:
-        protocol: Protocol identifier (e.g. ``"anthropic"``, ``"openai"``).
-        api_key: API key for authentication.
-        base_url: Base URL for the API endpoint.
+        protocol: 协议标识符（如 ``"anthropic"``、``"openai"``）。
+        api_key: 用于认证的 API 密钥。
+        base_url: API 端点的基础 URL。
 
     Returns:
-        A :class:`BaseProvider` instance.
+        :class:`BaseProvider` 实例。
 
     Raises:
-        ValueError: If *protocol* is not registered.
+        ValueError: 协议名未注册时抛出。
     """
     cls = _PROVIDER_REGISTRY.get(protocol)
     if cls is None:
         raise ValueError(
-            f"Unknown protocol '{protocol}'. "
-            f"Available: {', '.join(sorted(_PROVIDER_REGISTRY))}"
+            f"未知协议 '{protocol}'。"
+            f"可用: {', '.join(sorted(_PROVIDER_REGISTRY))}"
         )
     return cls(api_key=api_key, base_url=base_url)

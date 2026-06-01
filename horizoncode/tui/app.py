@@ -1,8 +1,7 @@
-"""TUI application for HorizonCode.
+"""HorizonCode TUI 交互界面。
 
-Uses ``prompt_toolkit`` for input handling and ``rich`` for styled output.
-The two libraries never control the terminal simultaneously:
-prompt_toolkit is active only during input; rich handles all output rendering.
+使用 ``prompt_toolkit`` 处理输入（多行、快捷键）、``rich`` 处理输出渲染（样式、Markdown）。
+两者不会同时控制终端：输入时只有 prompt_toolkit 活跃，流式输出时只有 rich 活跃。
 """
 
 import logging
@@ -23,8 +22,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# ── constants ──────────────────────────────────────────────────────────────
+# ── 常量 ────────────────────────────────────────────────────────────────────
 
+# prompt_toolkit 配色：绿色提示符，白色输入文本
 PROMPT_STYLE = Style.from_dict(
     {
         "prompt": "bold #00aa00",
@@ -32,22 +32,25 @@ PROMPT_STYLE = Style.from_dict(
     }
 )
 
-# ── key bindings───────────────────────────────────────────────────────────
+# ── 快捷键绑定 ──────────────────────────────────────────────────────────────
 
 bindings = KeyBindings()
 
 
 @bindings.add("escape", "enter")
 def _(event: object) -> None:
-    """Alt+Enter inserts a newline (multi-line input)."""
+    """Alt+Enter 在输入中插入换行（多行输入）。"""
     event.app.current_buffer.insert_text("\n")
 
 
-# ── TUI application ────────────────────────────────────────────────────────
+# ── TUI 应用 ────────────────────────────────────────────────────────────────
 
 
 class HorizonTUI:
-    """Interactive terminal chat interface for HorizonCode."""
+    """HorizonCode 的交互式终端聊天界面。
+
+    负责用户输入、流式渲染 AI 回复、命令处理和历史记录。
+    """
 
     def __init__(
         self,
@@ -55,6 +58,13 @@ class HorizonTUI:
         history_manager: "HistoryManager",
         model: str,
     ) -> None:
+        """初始化 TUI。
+
+        Args:
+            provider: LLM Provider 实例。
+            history_manager: 会话历史管理器。
+            model: 当前使用的模型名称（仅用于展示）。
+        """
         self._provider = provider
         self._history = history_manager
         self._model = model
@@ -62,25 +72,25 @@ class HorizonTUI:
         self._session: PromptSession = PromptSession(
             style=PROMPT_STYLE,
             key_bindings=bindings,
-            multiline=False,  # Enter sends, Alt+Enter inserts newline
+            multiline=False,  # Enter 发送，Alt+Enter 换行
         )
         self._streaming_cancelled = False
 
-    # ── public API ─────────────────────────────────────────────────────
+    # ── 公开 API ─────────────────────────────────────────────────────────
 
     async def run(self) -> None:
-        """Start the main interaction loop."""
+        """启动主交互循环。"""
         self._print_welcome()
 
         while True:
             try:
                 user_input = await self._get_input()
             except EOFError:
-                # Ctrl+D
+                # Ctrl+D 退出
                 break
             except KeyboardInterrupt:
-                # Ctrl+C on empty input → treat as exit
-                self._console.print("\n[dim]Use /exit or Ctrl+D to quit.[/dim]")
+                # 空输入时 Ctrl+C → 提示退出方式
+                self._console.print("\n[dim]使用 /exit 或 Ctrl+D 退出。[/dim]")
                 continue
 
             if user_input is None:
@@ -91,42 +101,41 @@ class HorizonTUI:
             if not user_input:
                 continue
 
-            # Handle slash commands
+            # 处理斜杠命令
             if user_input.startswith("/"):
                 should_exit = self._handle_command(user_input)
                 if should_exit:
                     break
                 continue
 
-            # Add user message to history and process
+            # 添加用户消息并获取 AI 回复
             self._history.add("user", user_input)
-            self._console.print()  # blank line before AI response
+            self._console.print()  # AI 回复前的空行
 
             await self._stream_response()
 
-            self._console.print()  # blank line after AI response
+            self._console.print()  # AI 回复后的空行
 
-    # ── input ──────────────────────────────────────────────────────────
+    # ── 输入处理 ─────────────────────────────────────────────────────────
 
     async def _get_input(self) -> str | None:
-        """Get user input via prompt_toolkit (async)."""
+        """通过 prompt_toolkit 异步获取用户输入。"""
         try:
             result = await self._session.prompt_async(
                 [("class:prompt", "> "), ("class:input", "")],
             )
             return result
         except KeyboardInterrupt:
-            # Ctrl+C during input → clear buffer
+            # 输入期间 Ctrl+C → 清空缓冲区
             return None
 
-    # ── streaming ─────────────────────────────────────────────────────
+    # ── 流式响应 ─────────────────────────────────────────────────────────
 
     async def _stream_response(self) -> None:
-        """Stream the AI response, rendering each chunk in real-time.
+        """流式获取并渲染 AI 回复。
 
-        Installs a temporary SIGINT handler so Ctrl+C cancels streaming
-        instead of killing the process. Restores the previous handler
-        when done (prompt_toolkit needs its own handler during input).
+        在流式输出期间临时安装 SIGINT 处理器，使 Ctrl+C 能中断生成
+        而不杀死进程。流式结束后恢复原处理器（交给 prompt_toolkit 处理输入）。
         """
         api_messages = self._history.get_api_messages()
         full_content = ""
@@ -134,7 +143,7 @@ class HorizonTUI:
         thinking_displayed = False
         self._streaming_cancelled = False
 
-        # Install cancellation handler for the duration of streaming
+        # 临时安装取消信号处理器
         old_handler = signal.signal(
             signal.SIGINT,
             lambda _signum, _frame: setattr(self, "_streaming_cancelled", True),
@@ -165,76 +174,74 @@ class HorizonTUI:
                     self._console.print(
                         Panel(
                             Text(frame.text, style="bold red"),
-                            title="Error",
+                            title="错误",
                             border_style="red",
                         )
                     )
                     return
 
         finally:
-            # Restore previous signal handler for prompt_toolkit
+            # 恢复原信号处理器
             signal.signal(signal.SIGINT, old_handler)
 
-        # Record and finalize
+        # 记录并收尾
         if full_thinking:
             self._history.add("thinking", full_thinking)
 
         if full_content:
             self._history.add("assistant", full_content)
-            self._console.print()  # trailing newline
+            self._console.print()  # 回复结束的换行
 
         if self._streaming_cancelled:
             self._console.print(
-                Text(" [cancelled]", style="dim yellow"),
+                Text(" [已取消]", style="dim yellow"),
             )
 
-    # ── commands ───────────────────────────────────────────────────────
+    # ── 命令处理 ─────────────────────────────────────────────────────────
 
     def _handle_command(self, text: str) -> bool:
-        """Handle a slash command. Returns ``True`` if the app should exit."""
+        """处理斜杠命令，返回 ``True`` 表示应退出程序。"""
         parts = text.split(maxsplit=1)
         cmd = parts[0].lower()
 
         if cmd == "/exit":
-            self._console.print("[dim]Goodbye![/dim]")
+            self._console.print("[dim]再见！[/dim]")
             return True
         elif cmd == "/help":
             self._print_help()
         else:
             self._console.print(
-                Text(f"Unknown command: {cmd}. Type /help for available commands.", style="yellow")
+                Text(f"未知命令: {cmd}。输入 /help 查看可用命令。", style="yellow")
             )
         return False
 
-    # ── display ────────────────────────────────────────────────────────
+    # ── 界面渲染 ─────────────────────────────────────────────────────────
 
     def _print_welcome(self) -> None:
-        """Print the welcome banner using rich Panel for automatic alignment."""
+        """打印欢迎面板。"""
         content = Text()
         content.append("HorizonCode v0.1.0\n", style="bold white")
         content.append(f"Model: {self._model}\n", style="dim")
-        content.append("/help for commands  /exit to quit", style="dim")
+        content.append("/help 查看命令  /exit 退出", style="dim")
         self._console.print(
             Panel(content, border_style="bold green", padding=(0, 1))
         )
 
     def _print_help(self) -> None:
-        """Print available commands."""
+        """打印帮助信息。"""
         help_text = Text()
-        help_text.append("Available commands:\n", style="bold underline")
+        help_text.append("可用命令:\n", style="bold underline")
         help_text.append("  /exit", style="bold yellow")
-        help_text.append("    Exit HorizonCode\n")
+        help_text.append("    退出 HorizonCode\n")
         help_text.append("  /help", style="bold yellow")
-        help_text.append("    Show this help message\n")
-        help_text.append("\nKeyboard shortcuts:\n", style="bold underline")
+        help_text.append("    显示此帮助信息\n")
+        help_text.append("\n快捷键:\n", style="bold underline")
         help_text.append("  Enter", style="bold cyan")
-        help_text.append("       Send message\n")
+        help_text.append("       发送消息\n")
         help_text.append("  Alt+Enter", style="bold cyan")
-        help_text.append("   Insert newline\n")
+        help_text.append("   插入换行\n")
         help_text.append("  Ctrl+C", style="bold cyan")
-        help_text.append("      Cancel AI generation\n")
+        help_text.append("      取消 AI 生成\n")
         help_text.append("  Ctrl+D", style="bold cyan")
-        help_text.append("      Exit HorizonCode\n")
+        help_text.append("      退出 HorizonCode\n")
         self._console.print(help_text)
-
-
