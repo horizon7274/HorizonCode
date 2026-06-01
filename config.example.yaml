@@ -1,0 +1,20 @@
+# HorizonCode 配置模板
+# 复制此文件为 ~/.horizoncode/config.yaml 或 ./.horizoncode/config.yaml
+# 填写你的 API key 后即可使用
+
+default_profile: claude
+
+profiles:
+  # Anthropic Claude API (也兼容 Anthropic 协议代理，如智谱 GLM)
+  claude:
+    protocol: anthropic
+    model: claude-sonnet-4-6
+    base_url: https://api.anthropic.com
+    api_key: ${ANTHROPIC_API_KEY}   # 支持环境变量引用，也可直接填写 key
+
+  # OpenAI API (兼容 OpenAI 协议代理)
+  openai:
+    protocol: openai
+    model: gpt-4o
+    base_url: https://api.openai.com/v1
+    api_key: ${OPENAI_API_KEY}

@@ -1,0 +1,14 @@
+# Python build artifacts
+*.egg-info/
+*.egg
+__pycache__/
+*.pyc
+
+# Virtual environment
+.venv/
+
+# Local configuration (contains API keys — DO NOT COMMIT)
+.horizoncode/
+
+# Project-level config (may contain secrets)
+horizoncode.yaml
