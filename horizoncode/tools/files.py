@@ -15,6 +15,8 @@ MAX_FILE_BYTES = 1024 * 1024
 class ReadFileTool(BaseTool):
     """读取项目内 UTF-8 文本文件，可选按行截取。"""
 
+    read_only = True
+
     definition = ToolDefinition(
         name="read_file",
         description="读取项目根目录内的 UTF-8 文本文件。需要时用 start_line 和 end_line 限定行范围。",

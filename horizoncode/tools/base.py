@@ -75,6 +75,10 @@ class BaseTool(ABC):
 
     definition: ToolDefinition
 
+    # 是否为纯只读工具（不产生任何副作用）。Agent 循环据此决定
+    # 同批工具调用能否并发执行，Plan Mode 也据此过滤可用工具。
+    read_only: bool = False
+
     @abstractmethod
     async def execute(
         self,

@@ -29,12 +29,20 @@ class ToolRegistry:
         """按名称取得工具，不存在时返回 ``None``。"""
         return self._tools.get(name)
 
-    def definitions_for(self, protocol: str) -> list[dict[str, Any]]:
-        """生成指定 Provider 协议所需的工具声明。"""
+    def definitions_for(self, protocol: str, *, read_only: bool = False) -> list[dict[str, Any]]:
+        """生成指定 Provider 协议所需的工具声明。
+
+        Args:
+            protocol: 目标 Provider 协议（anthropic / openai / ollama）。
+            read_only: 为 ``True`` 时只返回声明为只读的工具（Plan Mode 使用）。
+        """
+        selected = (
+            tool for tool in self._tools.values() if not read_only or tool.read_only
+        )
         if protocol == "anthropic":
-            return [{"name": tool.definition.name, "description": tool.definition.description, "input_schema": tool.definition.input_schema} for tool in self._tools.values()]
+            return [{"name": tool.definition.name, "description": tool.definition.description, "input_schema": tool.definition.input_schema} for tool in selected]
         if protocol in ("openai", "ollama"):
-            return [{"type": "function", "function": {"name": tool.definition.name, "description": tool.definition.description, "parameters": tool.definition.input_schema}} for tool in self._tools.values()]
+            return [{"type": "function", "function": {"name": tool.definition.name, "description": tool.definition.description, "parameters": tool.definition.input_schema}} for tool in selected]
         raise ValueError(f"不支持的工具协议: {protocol}")
 
     async def execute(self, call: ToolCall, *, confirm: ConfirmationCallback | None = None) -> ToolResult:

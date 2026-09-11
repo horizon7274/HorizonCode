@@ -17,6 +17,8 @@ MAX_SCAN_BYTES = 1024 * 1024
 class GlobFilesTool(BaseTool):
     """按 glob 模式列出项目根目录内的文件。"""
 
+    read_only = True
+
     definition = ToolDefinition(
         name="glob_files",
         description="按 glob 模式列出项目根目录内的文件，例如 horizoncode/**/*.py。",
@@ -50,6 +52,8 @@ class GlobFilesTool(BaseTool):
 
 class GrepCodeTool(BaseTool):
     """在项目内 UTF-8 文本文件中搜索文本或正则表达式。"""
+
+    read_only = True
 
     definition = ToolDefinition(
         name="grep_code",
