@@ -9,6 +9,9 @@ import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
+
+from horizoncode.tools.base import ToolCall, ToolResult
 
 # ── 常量 ────────────────────────────────────────────────────────────────────
 
@@ -58,13 +61,48 @@ class HistoryManager:
             return list(self.messages)
         return [m for m in self.messages if m["role"] in roles]
 
-    def get_api_messages(self) -> list[dict]:
-        """返回格式化为 LLM API 格式的消息列表（仅含 user 和 assistant 角色）。"""
+    def get_api_messages(self, protocol: str | None = None) -> list[dict]:
+        """按 Provider 协议返回 API 消息。
+
+        未传入协议时保持 v0.1 的文本消息过滤行为，供旧调用兼容。
+        """
+        if protocol == "openai":
+            return self._get_openai_messages()
+        if protocol == "anthropic":
+            return self._get_anthropic_messages()
+        if protocol == "ollama":
+            return self._get_ollama_messages()
         return [
             {"role": m["role"], "content": m["content"]}
             for m in self.messages
             if m["role"] in ("user", "assistant")
         ]
+
+    def add_tool_calls(self, calls: list[ToolCall], content: str = "") -> None:
+        """记录同一 assistant 响应中的文本和全部工具调用。"""
+        self.messages.append(
+            {
+                "role": "assistant_tool_calls",
+                "calls": [
+                    {"id": call.id, "name": call.name, "arguments": call.arguments}
+                    for call in calls
+                ],
+                "content": content,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+
+    def add_tool_result(self, call: ToolCall, result: ToolResult) -> None:
+        """记录一个工具调用及其带关联 ID 的结构化结果。"""
+        self.messages.append(
+            {
+                "role": "tool_result",
+                "tool_call_id": call.id,
+                "name": call.name,
+                "result": result.to_dict(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+        )
 
     def save(self) -> Path | None:
         """将当前会话保存到 JSON 文件。
@@ -129,3 +167,113 @@ class HistoryManager:
             preview = "empty"
 
         return f"{timestamp}_{preview}.json"
+
+    def _get_openai_messages(self) -> list[dict[str, Any]]:
+        """将内部记录转换为 OpenAI Chat Completions 消息。"""
+        messages: list[dict[str, Any]] = []
+        for message in self.messages:
+            role = message["role"]
+            if role in ("user", "assistant"):
+                messages.append({"role": role, "content": message["content"]})
+            elif role == "assistant_tool_calls":
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": message.get("content", ""),
+                        "tool_calls": [
+                            {
+                                "id": call["id"],
+                                "type": "function",
+                                "function": {
+                                    "name": call["name"],
+                                    "arguments": json.dumps(call["arguments"], ensure_ascii=False),
+                                },
+                            }
+                            for call in message["calls"]
+                        ],
+                    }
+                )
+            elif role == "tool_result":
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": message["tool_call_id"],
+                        "content": json.dumps(message["result"], ensure_ascii=False),
+                    }
+                )
+        return messages
+
+    def _get_anthropic_messages(self) -> list[dict[str, Any]]:
+        """将内部记录转换为 Anthropic Messages API 消息。"""
+        messages: list[dict[str, Any]] = []
+        pending_results: list[dict[str, Any]] = []
+
+        def flush_results() -> None:
+            if pending_results:
+                messages.append({"role": "user", "content": list(pending_results)})
+                pending_results.clear()
+
+        for message in self.messages:
+            role = message["role"]
+            if role == "tool_result":
+                pending_results.append(
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": message["tool_call_id"],
+                        "content": json.dumps(message["result"], ensure_ascii=False),
+                    }
+                )
+                continue
+            flush_results()
+            if role in ("user", "assistant"):
+                messages.append({"role": role, "content": message["content"]})
+            elif role == "assistant_tool_calls":
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": (
+                            ([{"type": "text", "text": message["content"]}] if message.get("content") else [])
+                            + [
+                                {"type": "tool_use", "id": call["id"], "name": call["name"], "input": call["arguments"]}
+                                for call in message["calls"]
+                            ]
+                        ),
+                    }
+                )
+        flush_results()
+        return messages
+
+    def _get_ollama_messages(self) -> list[dict[str, Any]]:
+        """将内部记录转换为 Ollama 原生聊天 API 消息。"""
+        messages: list[dict[str, Any]] = []
+        for message in self.messages:
+            role = message["role"]
+            if role in ("user", "assistant"):
+                messages.append({"role": role, "content": message["content"]})
+            elif role == "assistant_tool_calls":
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": message.get("content", ""),
+                        "tool_calls": [
+                            {
+                                "type": "function",
+                                "function": {
+                                    "index": index,
+                                    "name": call["name"],
+                                    "arguments": call["arguments"],
+                                },
+                            }
+                            for index, call in enumerate(message["calls"])
+                        ],
+                    }
+                )
+            elif role == "tool_result":
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_name": message["name"],
+                        "content": json.dumps(message["result"], ensure_ascii=False),
+                    }
+                )
+        return messages
