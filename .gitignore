@@ -22,3 +22,6 @@ skills/
 
 # 本地测试目录
 local_test/
+
+# 忽略文档目录
+docs/
