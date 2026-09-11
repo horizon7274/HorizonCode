@@ -13,6 +13,19 @@ from horizoncode.tools.base import ToolCall
 
 
 @dataclass
+class Usage:
+    """一次 LLM 响应的 Token 用量。
+
+    属性:
+        input_tokens: 输入（提示）Token 数；Provider 未提供时为 ``None``。
+        output_tokens: 输出（补全）Token 数；Provider 未提供时为 ``None``。
+    """
+
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+
+
+@dataclass
 class StreamFrame:
     """流式响应中的单个数据帧。
 
@@ -20,12 +33,14 @@ class StreamFrame:
         type: 帧类型，取值为 ``"thinking"``、``"content"``、``"error"``、``"done"``。
         text: 文本内容（``done`` 帧为空，``error`` 帧为错误信息）。
         raw: Provider 返回的原始数据（用于调试/日志）。
+        usage: 本轮响应的 Token 用量，仅 ``done`` 帧可能携带。
     """
 
     type: str  # "thinking" | "content" | "error" | "done"
     text: str = ""
     raw: object = None
     tool_call: ToolCall | None = None
+    usage: Usage | None = None
 
 
 # ── 抽象接口 ────────────────────────────────────────────────────────────────
@@ -63,6 +78,7 @@ class BaseProvider(ABC):
         messages: list[dict],
         model: str,
         tools: list[dict[str, Any]] | None = None,
+        system: str | None = None,
     ) -> AsyncIterator[StreamFrame]:
         """对流式聊天请求，逐帧返回响应。
 
@@ -70,6 +86,7 @@ class BaseProvider(ABC):
             messages: 消息字典列表，每个字典含 ``role`` 和 ``content`` 键。
             model: 要使用的模型名称（Provider 相关）。
             tools: 已转换为当前 Provider 协议的工具声明；``None`` 表示不启用工具。
+            system: 可选的系统提示；Provider 会按各自协议的正确位置注入。
 
         Yields:
             :class:`StreamFrame` 实例，随响应生成逐个产出。

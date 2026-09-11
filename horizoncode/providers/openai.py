@@ -10,7 +10,7 @@ from typing import Any, AsyncIterator
 
 import httpx
 
-from horizoncode.providers.base import BaseProvider, StreamFrame, register_provider
+from horizoncode.providers.base import BaseProvider, StreamFrame, Usage, register_provider
 from horizoncode.tools.base import ToolCall
 
 logger = logging.getLogger(__name__)
@@ -59,19 +59,23 @@ class OpenAIProvider(BaseProvider):
         messages: list[dict],
         model: str,
         tools: list[dict[str, Any]] | None = None,
+        system: str | None = None,
     ) -> AsyncIterator[StreamFrame]:
         """向 OpenAI Chat Completions API 发起流式聊天请求。
 
         Args:
             messages: 统一格式的消息列表。
             model: 模型名称（如 ``gpt-4o``）。
+            system: 可选系统提示，以 system 角色消息插入到消息列表最前。
         """
 
         body = {
             "model": model,
-            "messages": messages,
+            "messages": ([{"role": "system", "content": system}] + messages if system else messages),
             "max_tokens": DEFAULT_MAX_TOKENS,
             "stream": True,
+            # 请求在流末尾附带 usage 统计的独立 chunk
+            "stream_options": {"include_usage": True},
         }
         if tools:
             body["tools"] = tools
@@ -93,6 +97,8 @@ class OpenAIProvider(BaseProvider):
 
                 # 按 index 缓存不同调用的 JSON 参数分片。
                 tool_chunks: dict[int, dict[str, str]] = {}
+                # 流末尾 usage chunk 携带的 Token 用量
+                usage: Usage | None = None
 
                 # 逐行解析 SSE 流
                 async for line in response.aiter_lines():
@@ -112,7 +118,7 @@ class OpenAIProvider(BaseProvider):
                                 yield StreamFrame(type="tool_call", tool_call=call)
                             else:
                                 yield StreamFrame(type="error", text=call)
-                        yield StreamFrame(type="done")
+                        yield StreamFrame(type="done", usage=usage)
                         return
 
                     try:
@@ -120,6 +126,14 @@ class OpenAIProvider(BaseProvider):
                     except json.JSONDecodeError:
                         logger.debug("SSE 数据解析失败: %s", data_str[:100])
                         continue
+
+                    # usage chunk（include_usage 开启后出现在 [DONE] 之前，choices 为空）
+                    raw_usage = data.get("usage")
+                    if isinstance(raw_usage, dict):
+                        usage = Usage(
+                            input_tokens=raw_usage.get("prompt_tokens"),
+                            output_tokens=raw_usage.get("completion_tokens"),
+                        )
 
                     # 提取 content delta
                     choices = data.get("choices", [])
@@ -152,7 +166,7 @@ class OpenAIProvider(BaseProvider):
                     else:
                         yield StreamFrame(type="error", text=call)
                 # 如果循环正常结束但未收到 [DONE]，仍然发送完成信号
-                yield StreamFrame(type="done")
+                yield StreamFrame(type="done", usage=usage)
 
         except httpx.ConnectError as exc:
             yield StreamFrame(

@@ -9,7 +9,7 @@ from typing import Any, AsyncIterator
 
 import httpx
 
-from horizoncode.providers.base import BaseProvider, StreamFrame, register_provider
+from horizoncode.providers.base import BaseProvider, StreamFrame, Usage, register_provider
 from horizoncode.tools.base import ToolCall
 
 logger = logging.getLogger(__name__)
@@ -62,6 +62,7 @@ class AnthropicProvider(BaseProvider):
         messages: list[dict],
         model: str,
         tools: list[dict[str, Any]] | None = None,
+        system: str | None = None,
     ) -> AsyncIterator[StreamFrame]:
         """向 Anthropic Messages API 发起流式聊天请求。
 
@@ -71,6 +72,7 @@ class AnthropicProvider(BaseProvider):
         Args:
             messages: 统一格式的消息列表。
             model: 模型名称（如 ``claude-sonnet-4-6``）。
+            system: 可选系统提示，放入请求体顶层的 ``system`` 字段。
         """
 
         # 检测模型是否支持 extended thinking（Sonnet 4+、Opus 4+）
@@ -90,6 +92,8 @@ class AnthropicProvider(BaseProvider):
             }
         if tools:
             body["tools"] = tools
+        if system:
+            body["system"] = system
 
         try:
             client = await self._get_client()
@@ -108,6 +112,8 @@ class AnthropicProvider(BaseProvider):
 
                 # 以内容块 index 缓存 input_json_delta 参数分片。
                 tool_chunks: dict[int, dict[str, str]] = {}
+                # message_start 事件携带的 Token 用量
+                usage: Usage | None = None
 
                 # 逐行解析 SSE 流
                 async for line in response.aiter_lines():
@@ -132,6 +138,15 @@ class AnthropicProvider(BaseProvider):
                     # 跳过 ping 心跳事件
                     if isinstance(data, dict) and data.get("type") == "ping":
                         continue
+
+                    # message_start 事件带整体用量
+                    if isinstance(data, dict) and data.get("type") == "message_start":
+                        message_usage = data.get("message", {}).get("usage")
+                        if isinstance(message_usage, dict):
+                            usage = Usage(
+                                input_tokens=message_usage.get("input_tokens"),
+                                output_tokens=message_usage.get("output_tokens"),
+                            )
 
                     # 处理内容增量事件
                     if isinstance(data, dict) and data.get("type") == "content_block_start":
@@ -176,6 +191,16 @@ class AnthropicProvider(BaseProvider):
                             else:
                                 yield StreamFrame(type="error", text=call)
 
+                    if isinstance(data, dict) and data.get("type") == "message_delta":
+                        # message_delta 的 usage 是累计值，输出 Token 会在结尾更新
+                        delta_usage = data.get("usage")
+                        if isinstance(delta_usage, dict):
+                            usage = usage or Usage()
+                            if delta_usage.get("output_tokens") is not None:
+                                usage.output_tokens = delta_usage.get("output_tokens")
+                            if delta_usage.get("input_tokens") is not None:
+                                usage.input_tokens = delta_usage.get("input_tokens")
+
                     # 处理 API 返回的错误事件
                     if isinstance(data, dict) and data.get("type") == "error":
                         yield StreamFrame(
@@ -183,7 +208,7 @@ class AnthropicProvider(BaseProvider):
                             text=data.get("error", {}).get("message", str(data)),
                         )
 
-                yield StreamFrame(type="done")
+                yield StreamFrame(type="done", usage=usage)
 
         except httpx.ConnectError as exc:
             yield StreamFrame(

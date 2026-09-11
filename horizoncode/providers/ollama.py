@@ -6,7 +6,7 @@ from typing import Any, AsyncIterator
 
 import httpx
 
-from horizoncode.providers.base import BaseProvider, StreamFrame, register_provider
+from horizoncode.providers.base import BaseProvider, StreamFrame, Usage, register_provider
 from horizoncode.tools.base import ToolCall
 
 logger = logging.getLogger(__name__)
@@ -46,6 +46,7 @@ class OllamaProvider(BaseProvider):
         messages: list[dict],
         model: str,
         tools: list[dict[str, Any]] | None = None,
+        system: str | None = None,
     ) -> AsyncIterator[StreamFrame]:
         """调用 Ollama 原生聊天接口并逐帧返回模型输出。
 
@@ -53,10 +54,11 @@ class OllamaProvider(BaseProvider):
             messages: 已转换为 Ollama 消息格式的会话历史。
             model: 本地模型名称。
             tools: Ollama function tools 定义；未提供时不发送该字段。
+            system: 可选系统提示，以 system 角色消息插入到消息列表最前。
         """
         body: dict[str, Any] = {
             "model": model,
-            "messages": messages,
+            "messages": ([{"role": "system", "content": system}] + messages if system else messages),
             "stream": True,
         }
         if tools:
@@ -111,7 +113,15 @@ class OllamaProvider(BaseProvider):
                                 yield StreamFrame(type="error", text=call, raw=data)
 
                     if data.get("done") is True:
-                        yield StreamFrame(type="done", raw=data)
+                        # 末帧携带 Token 用量统计
+                        input_tokens = data.get("prompt_eval_count")
+                        output_tokens = data.get("eval_count")
+                        usage = (
+                            Usage(input_tokens=input_tokens, output_tokens=output_tokens)
+                            if input_tokens is not None or output_tokens is not None
+                            else None
+                        )
+                        yield StreamFrame(type="done", raw=data, usage=usage)
                         return
 
                 yield StreamFrame(type="done")
