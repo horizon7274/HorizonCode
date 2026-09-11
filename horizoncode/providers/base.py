@@ -5,7 +5,9 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import AsyncIterator
+from typing import AsyncIterator, Any
+
+from horizoncode.tools.base import ToolCall
 
 # ── 数据结构 ────────────────────────────────────────────────────────────────
 
@@ -23,6 +25,7 @@ class StreamFrame:
     type: str  # "thinking" | "content" | "error" | "done"
     text: str = ""
     raw: object = None
+    tool_call: ToolCall | None = None
 
 
 # ── 抽象接口 ────────────────────────────────────────────────────────────────
@@ -52,15 +55,21 @@ class BaseProvider(ABC):
     TUI 层不应因 API 调用失败而崩溃。
     """
 
+    protocol: str
+
     @abstractmethod
     async def stream_chat(
-        self, messages: list[dict], model: str
+        self,
+        messages: list[dict],
+        model: str,
+        tools: list[dict[str, Any]] | None = None,
     ) -> AsyncIterator[StreamFrame]:
         """对流式聊天请求，逐帧返回响应。
 
         Args:
             messages: 消息字典列表，每个字典含 ``role`` 和 ``content`` 键。
             model: 要使用的模型名称（Provider 相关）。
+            tools: 已转换为当前 Provider 协议的工具声明；``None`` 表示不启用工具。
 
         Yields:
             :class:`StreamFrame` 实例，随响应生成逐个产出。

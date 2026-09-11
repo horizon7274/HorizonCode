@@ -21,8 +21,17 @@ dependencies = [
 [project.scripts]
 horizoncode = "horizoncode.main:main"
 
+[tool.setuptools.packages.find]
+include = ["horizoncode*"]
+
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
     "pytest-asyncio>=0.23",
 ]

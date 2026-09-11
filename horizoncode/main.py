@@ -14,6 +14,7 @@ from horizoncode.config import load_config, get_active_profile, USER_CONFIG_DIR
 from horizoncode.providers.base import get_provider
 from horizoncode.history import HistoryManager
 from horizoncode.tui.app import HorizonTUI
+from horizoncode.tools.registry import create_default_registry
 
 # ── 日志 ────────────────────────────────────────────────────────────────────
 
@@ -44,13 +45,15 @@ def _parse_args() -> argparse.Namespace:
         description="HorizonCode —— 终端 AI 编程助手",
     )
     parser.add_argument(
-        "-c", "--config",
+        "-c",
+        "--config",
         type=Path,
         default=None,
         help="项目级配置文件的路径（默认: ./horizoncode.yaml）",
     )
     parser.add_argument(
-        "-v", "--verbose",
+        "-v",
+        "--verbose",
         action="store_true",
         help="启用调试日志，输出到 ~/.horizoncode/horizoncode.log",
     )
@@ -102,12 +105,14 @@ async def _run_app(config_path: Path | None, verbose: bool) -> None:
 
     # 3. 初始化历史管理器
     history = HistoryManager()
+    tools = create_default_registry(Path.cwd())
 
     # 4. 运行 TUI
     tui = HorizonTUI(
         provider=provider,
         history_manager=history,
         model=profile["model"],
+        tools=tools,
     )
 
     try:
@@ -140,3 +145,7 @@ def main() -> None:
         # 用户强制退出（多次 Ctrl+C）
         print("\n已中断。", file=sys.stderr)
         sys.exit(130)
+
+
+if __name__ == "__main__":
+    main()

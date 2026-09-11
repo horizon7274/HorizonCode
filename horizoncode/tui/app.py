@@ -16,6 +16,9 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
 
+from horizoncode.tools.base import ToolCall
+from horizoncode.tools.registry import ToolRegistry
+
 if TYPE_CHECKING:
     from horizoncode.providers.base import BaseProvider
     from horizoncode.history import HistoryManager
@@ -57,6 +60,7 @@ class HorizonTUI:
         provider: "BaseProvider",
         history_manager: "HistoryManager",
         model: str,
+        tools: ToolRegistry,
     ) -> None:
         """初始化 TUI。
 
@@ -64,10 +68,12 @@ class HorizonTUI:
             provider: LLM Provider 实例。
             history_manager: 会话历史管理器。
             model: 当前使用的模型名称（仅用于展示）。
+            tools: 本次会话可调用的项目内工具注册中心。
         """
         self._provider = provider
         self._history = history_manager
         self._model = model
+        self._tools = tools
         self._console = Console()
         self._session: PromptSession = PromptSession(
             style=PROMPT_STYLE,
@@ -137,9 +143,11 @@ class HorizonTUI:
         在流式输出期间临时安装 SIGINT 处理器，使 Ctrl+C 能中断生成
         而不杀死进程。流式结束后恢复原处理器（交给 prompt_toolkit 处理输入）。
         """
-        api_messages = self._history.get_api_messages()
+        protocol = self._provider.protocol
+        api_messages = self._history.get_api_messages(protocol=protocol)
         full_content = ""
         full_thinking = ""
+        tool_calls: list[ToolCall] = []
         thinking_displayed = False
         self._streaming_cancelled = False
 
@@ -151,7 +159,9 @@ class HorizonTUI:
 
         try:
             async for frame in self._provider.stream_chat(
-                api_messages, self._model
+                api_messages,
+                self._model,
+                tools=self._tools.definitions_for(protocol),
             ):
                 if self._streaming_cancelled:
                     break
@@ -180,6 +190,9 @@ class HorizonTUI:
                     )
                     return
 
+                elif frame.type == "tool_call" and frame.tool_call is not None:
+                    tool_calls.append(frame.tool_call)
+
         finally:
             # 恢复原信号处理器
             signal.signal(signal.SIGINT, old_handler)
@@ -188,14 +201,46 @@ class HorizonTUI:
         if full_thinking:
             self._history.add("thinking", full_thinking)
 
-        if full_content:
+        if tool_calls:
+            self._history.add_tool_calls(tool_calls, content=full_content)
+        elif full_content:
             self._history.add("assistant", full_content)
             self._console.print()  # 回复结束的换行
+
+        if tool_calls:
+            self._console.print()
+            await self._execute_tool_calls(tool_calls)
 
         if self._streaming_cancelled:
             self._console.print(
                 Text(" [已取消]", style="dim yellow"),
             )
+
+    async def _execute_tool_calls(self, calls: list[ToolCall]) -> None:
+        """按模型响应中的原始顺序执行独立调用，并将结果记入历史。"""
+        for call in calls:
+            self._console.print(
+                f"[工具调用] {call.name}",
+                style="bold cyan",
+            )
+
+            result = await self._tools.execute(call, confirm=self._confirm_command)
+            self._history.add_tool_result(call, result)
+            style = "green" if result.ok else "yellow"
+            self._console.print(f"[工具] {result.summary()}", style=style)
+
+    async def _confirm_command(self, command: str, details: dict) -> bool:
+        """在执行命令前显示关键信息并等待用户明确同意。"""
+        self._console.print()
+        self._console.print(
+            Panel(
+                f"命令: {command}\n工作目录: {details['cwd']}\n超时: {details['timeout_seconds']} 秒",
+                title="模型请求执行命令",
+                border_style="yellow",
+            )
+        )
+        answer = await self._session.prompt_async("允许执行？[y/N] ")
+        return answer.strip().lower() in {"y", "yes"}
 
     # ── 命令处理 ─────────────────────────────────────────────────────────
 
@@ -220,12 +265,10 @@ class HorizonTUI:
     def _print_welcome(self) -> None:
         """打印欢迎面板。"""
         content = Text()
-        content.append("HorizonCode v0.1.0\n", style="bold white")
+        content.append("HorizonCode v0.2.0\n", style="bold white")
         content.append(f"Model: {self._model}\n", style="dim")
         content.append("/help 查看命令  /exit 退出", style="dim")
-        self._console.print(
-            Panel(content, border_style="bold green", padding=(0, 1))
-        )
+        self._console.print(Panel(content, border_style="bold green", padding=(0, 1)))
 
     def _print_help(self) -> None:
         """打印帮助信息。"""
