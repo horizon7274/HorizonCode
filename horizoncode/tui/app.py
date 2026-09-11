@@ -234,7 +234,7 @@ class HorizonTUI:
         self._console.print()
         self._console.print(
             Panel(
-                f"命令: {command}\n工作目录: {details['cwd']}\n超时: {details['timeout_seconds']} 秒",
+                f"命令: {command}\n工作目录: {details['cwd']}\n运行时限: {details['timeout_seconds']} 秒（超时后命令将被终止）",
                 title="模型请求执行命令",
                 border_style="yellow",
             )
