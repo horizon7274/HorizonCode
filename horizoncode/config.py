@@ -22,6 +22,9 @@ REQUIRED_FIELDS = {"protocol", "model", "base_url", "api_key"}
 # 环境变量引用模式: ${VAR_NAME}
 ENV_VAR_PATTERN = re.compile(r"\$\{(\w+)\}")
 
+# Agent 行为默认值（可被配置文件的 agent 节覆盖）
+AGENT_DEFAULTS = {"max_iterations": 25}
+
 # ── 内部辅助 ────────────────────────────────────────────────────────────────
 
 
@@ -92,7 +95,7 @@ def load_config(project_path: Path | None = None) -> dict:
         - ``default_profile``: 当前激活的 profile 名称
         - ``profiles``: profile 名 → {protocol, model, base_url, api_key} 的映射
     """
-    config: dict = {"profiles": {}}
+    config: dict = {"profiles": {}, "agent": dict(AGENT_DEFAULTS)}
 
     # 1. 用户级配置
     if USER_CONFIG_PATH.exists():
@@ -103,6 +106,8 @@ def load_config(project_path: Path | None = None) -> dict:
     user_profiles = raw.get("profiles", {})
     if "default_profile" in raw:
         config["default_profile"] = raw["default_profile"]
+    if isinstance(raw.get("agent"), dict):
+        config["agent"] = _deep_merge(config["agent"], raw["agent"])
 
     # 2. 项目本地配置 (./.horizoncode/config.yaml)
     if LOCAL_CONFIG_PATH.exists():
@@ -111,6 +116,8 @@ def load_config(project_path: Path | None = None) -> dict:
         user_profiles = _deep_merge(user_profiles, local_profiles)
         if "default_profile" in local_raw:
             config["default_profile"] = local_raw["default_profile"]
+        if isinstance(local_raw.get("agent"), dict):
+            config["agent"] = _deep_merge(config["agent"], local_raw["agent"])
 
     # 3. 项目级配置 (./horizoncode.yaml 或 -c 指定)
     proj_path = project_path or PROJECT_CONFIG_PATH
@@ -120,6 +127,8 @@ def load_config(project_path: Path | None = None) -> dict:
         user_profiles = _deep_merge(user_profiles, project_profiles)
         if "default_profile" in proj_raw:
             config["default_profile"] = proj_raw["default_profile"]
+        if isinstance(proj_raw.get("agent"), dict):
+            config["agent"] = _deep_merge(config["agent"], proj_raw["agent"])
 
     # 替换环境变量并校验
     config["profiles"] = _deep_substitute(user_profiles)
@@ -131,6 +140,21 @@ def load_config(project_path: Path | None = None) -> dict:
         config["default_profile"] = next(iter(config["profiles"]))
 
     return config
+
+
+def get_agent_settings(config: dict) -> dict:
+    """返回合并后的 Agent 行为配置（未知键忽略，非法值回落默认）。
+
+    Args:
+        config: :func:`load_config` 返回的配置字典。
+    """
+    settings = dict(AGENT_DEFAULTS)
+    raw = config.get("agent", {})
+    if isinstance(raw, dict):
+        value = raw.get("max_iterations", settings["max_iterations"])
+        if isinstance(value, int) and value >= 1:
+            settings["max_iterations"] = value
+    return settings
 
 
 def get_active_profile(config: dict) -> dict:
