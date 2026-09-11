@@ -12,3 +12,10 @@ __pycache__/
 
 # Project-level config (may contain secrets)
 horizoncode.yaml
+
+# codex
+AGENTS.md
+skills/
+
+# vscode配置文件
+.vscode/
