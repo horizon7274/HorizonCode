@@ -16,5 +16,14 @@ profiles:
   openai:
     protocol: openai
     model: gpt-4o
+    # 只填写 API 基础地址；程序会自动追加 /chat/completions
+    # 例如实际请求地址为 https://api.openai.com/v1/chat/completions
     base_url: https://api.openai.com/v1
     api_key: ${OPENAI_API_KEY}
+
+  # 本地 Ollama 原生 API（先执行：ollama pull qwen2.5-coder:7b）
+  ollama:
+    protocol: ollama
+    model: qwen2.5-coder:7b
+    base_url: http://localhost:11434
+    api_key: ""

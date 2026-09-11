@@ -4,6 +4,7 @@ import pytest
 
 from horizoncode.providers.base import StreamFrame, get_provider
 from horizoncode.providers.anthropic import AnthropicProvider
+from horizoncode.providers.ollama import OllamaProvider
 from horizoncode.providers.openai import OpenAIProvider
 
 
@@ -28,6 +29,10 @@ class TestGetProvider:
         p = get_provider("openai", api_key="sk-test", base_url="https://api.openai.com/v1")
         assert isinstance(p, OpenAIProvider)
 
+    def test_returns_ollama_provider(self):
+        p = get_provider("ollama", api_key="", base_url="http://localhost:11434")
+        assert isinstance(p, OllamaProvider)
+
     def test_unknown_protocol_raises(self):
         with pytest.raises(ValueError, match="未知协议"):
             get_provider("unknown", api_key="sk-test", base_url="http://localhost")
@@ -41,3 +46,7 @@ class TestProviderInit:
     def test_openai_strips_trailing_slash(self):
         p = OpenAIProvider(api_key="sk-test", base_url="https://api.openai.com/v1/")
         assert p._base_url == "https://api.openai.com/v1"
+
+    def test_ollama_strips_trailing_slash(self):
+        p = OllamaProvider(api_key="", base_url="http://localhost:11434/")
+        assert p._base_url == "http://localhost:11434"
