@@ -10,6 +10,7 @@ import pytest
 from horizoncode.config import (
     load_config,
     get_active_profile,
+    get_agent_settings,
     _substitute_env_vars,
     _deep_merge,
     _validate_profile,
@@ -197,3 +198,41 @@ class TestGetActiveProfile:
                     }
                 }
             })
+
+
+class TestAgentSettings:
+    def test_default_max_iterations_is_25(self):
+        assert get_agent_settings({}) == {"max_iterations": 25}
+
+    def test_configured_max_iterations_is_used(self):
+        assert get_agent_settings({"agent": {"max_iterations": 5}}) == {"max_iterations": 5}
+
+    def test_invalid_max_iterations_falls_back_to_default(self):
+        assert get_agent_settings({"agent": {"max_iterations": 0}}) == {"max_iterations": 25}
+        assert get_agent_settings({"agent": {"max_iterations": "5"}}) == {"max_iterations": 25}
+
+    def test_project_agent_settings_override_user(self, tmp_path):
+        user_file = tmp_path / "user.yaml"
+        project_file = tmp_path / "project.yaml"
+        user_file.write_text(yaml.dump({
+            "agent": {"max_iterations": 10},
+            "profiles": {
+                "main": {
+                    "protocol": "openai",
+                    "model": "gpt-4o",
+                    "base_url": "https://api.openai.com/v1",
+                    "api_key": "sk-test",
+                }
+            },
+        }))
+        project_file.write_text(yaml.dump({"agent": {"max_iterations": 3}}))
+
+        import horizoncode.config as cfg
+        original = cfg.USER_CONFIG_PATH
+        cfg.USER_CONFIG_PATH = user_file
+        try:
+            config = load_config(project_path=project_file)
+        finally:
+            cfg.USER_CONFIG_PATH = original
+
+        assert get_agent_settings(config)["max_iterations"] == 3
