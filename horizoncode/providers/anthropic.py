@@ -5,11 +5,12 @@
 
 import json
 import logging
-from typing import AsyncIterator
+from typing import Any, AsyncIterator
 
 import httpx
 
 from horizoncode.providers.base import BaseProvider, StreamFrame, register_provider
+from horizoncode.tools.base import ToolCall
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +30,8 @@ class AnthropicProvider(BaseProvider):
     通过 SSE 流式解析响应，将原始事件映射为统一的 StreamFrame 帧序列。
     支持通过 base_url 指向 Anthropic 兼容代理（如智谱 GLM）。
     """
+
+    protocol = "anthropic"
 
     def __init__(self, api_key: str, base_url: str) -> None:
         """初始化 Anthropic Provider。
@@ -55,7 +58,10 @@ class AnthropicProvider(BaseProvider):
         return self._client
 
     async def stream_chat(
-        self, messages: list[dict], model: str
+        self,
+        messages: list[dict],
+        model: str,
+        tools: list[dict[str, Any]] | None = None,
     ) -> AsyncIterator[StreamFrame]:
         """向 Anthropic Messages API 发起流式聊天请求。
 
@@ -82,6 +88,8 @@ class AnthropicProvider(BaseProvider):
                 "type": "enabled",
                 "budget_tokens": THINKING_BUDGET_TOKENS,
             }
+        if tools:
+            body["tools"] = tools
 
         try:
             client = await self._get_client()
@@ -97,6 +105,9 @@ class AnthropicProvider(BaseProvider):
                         text=f"Anthropic API 错误 ({response.status_code}): {_summarize_error(error_text)}",
                     )
                     return
+
+                # 以内容块 index 缓存 input_json_delta 参数分片。
+                tool_chunks: dict[int, dict[str, str]] = {}
 
                 # 逐行解析 SSE 流
                 async for line in response.aiter_lines():
@@ -123,6 +134,18 @@ class AnthropicProvider(BaseProvider):
                         continue
 
                     # 处理内容增量事件
+                    if isinstance(data, dict) and data.get("type") == "content_block_start":
+                        block = data.get("content_block", {})
+                        if block.get("type") == "tool_use":
+                            index = data.get("index")
+                            if isinstance(index, int):
+                                initial_input = block.get("input", {})
+                                tool_chunks[index] = {
+                                    "id": str(block.get("id", "")),
+                                    "name": str(block.get("name", "")),
+                                    "arguments": json.dumps(initial_input) if initial_input else "",
+                                }
+
                     if isinstance(data, dict) and data.get("type") == "content_block_delta":
                         delta = data.get("delta", {})
                         delta_type = delta.get("type", "")
@@ -139,6 +162,19 @@ class AnthropicProvider(BaseProvider):
                                 text=delta.get("text", ""),
                                 raw=data,
                             )
+                        elif delta_type == "input_json_delta":
+                            index = data.get("index")
+                            if isinstance(index, int) and index in tool_chunks:
+                                tool_chunks[index]["arguments"] += delta.get("partial_json", "")
+
+                    if isinstance(data, dict) and data.get("type") == "content_block_stop":
+                        index = data.get("index")
+                        if isinstance(index, int) and index in tool_chunks:
+                            call = _build_tool_call(tool_chunks.pop(index))
+                            if isinstance(call, ToolCall):
+                                yield StreamFrame(type="tool_call", tool_call=call)
+                            else:
+                                yield StreamFrame(type="error", text=call)
 
                     # 处理 API 返回的错误事件
                     if isinstance(data, dict) and data.get("type") == "error":
@@ -211,6 +247,17 @@ def _summarize_error(body: bytes) -> str:
         pass
     text = body.decode("utf-8", errors="replace")[:200]
     return text
+
+
+def _build_tool_call(chunk: dict[str, str]) -> ToolCall | str:
+    """将 Anthropic 工具内容块中的 JSON 参数转换为统一调用。"""
+    try:
+        arguments = json.loads(chunk["arguments"] or "{}")
+    except json.JSONDecodeError as exc:
+        return f"工具调用参数不是有效 JSON（{chunk.get('name', 'unknown')}）: {exc}"
+    if not isinstance(arguments, dict) or not chunk["id"] or not chunk["name"]:
+        return "工具调用缺少 id、名称或对象类型参数"
+    return ToolCall(id=chunk["id"], name=chunk["name"], arguments=arguments)
 
 
 # ── 注册 ────────────────────────────────────────────────────────────────────

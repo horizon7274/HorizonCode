@@ -6,11 +6,12 @@
 
 import json
 import logging
-from typing import AsyncIterator
+from typing import Any, AsyncIterator
 
 import httpx
 
 from horizoncode.providers.base import BaseProvider, StreamFrame, register_provider
+from horizoncode.tools.base import ToolCall
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +28,8 @@ class OpenAIProvider(BaseProvider):
 
     解析 SSE 事件流（``data: [DONE]`` 终止），将每个 delta 映射为 StreamFrame。
     """
+
+    protocol = "openai"
 
     def __init__(self, api_key: str, base_url: str) -> None:
         """初始化 OpenAI Provider。
@@ -52,7 +55,10 @@ class OpenAIProvider(BaseProvider):
         return self._client
 
     async def stream_chat(
-        self, messages: list[dict], model: str
+        self,
+        messages: list[dict],
+        model: str,
+        tools: list[dict[str, Any]] | None = None,
     ) -> AsyncIterator[StreamFrame]:
         """向 OpenAI Chat Completions API 发起流式聊天请求。
 
@@ -67,6 +73,8 @@ class OpenAIProvider(BaseProvider):
             "max_tokens": DEFAULT_MAX_TOKENS,
             "stream": True,
         }
+        if tools:
+            body["tools"] = tools
 
         try:
             client = await self._get_client()
@@ -83,6 +91,9 @@ class OpenAIProvider(BaseProvider):
                     )
                     return
 
+                # 按 index 缓存不同调用的 JSON 参数分片。
+                tool_chunks: dict[int, dict[str, str]] = {}
+
                 # 逐行解析 SSE 流
                 async for line in response.aiter_lines():
                     if not line:
@@ -95,6 +106,12 @@ class OpenAIProvider(BaseProvider):
                     data_str = line[6:].strip()
 
                     if data_str == "[DONE]":
+                        for index in sorted(tool_chunks):
+                            call = _build_tool_call(tool_chunks[index])
+                            if isinstance(call, ToolCall):
+                                yield StreamFrame(type="tool_call", tool_call=call)
+                            else:
+                                yield StreamFrame(type="error", text=call)
                         yield StreamFrame(type="done")
                         return
 
@@ -115,7 +132,25 @@ class OpenAIProvider(BaseProvider):
                                 text=content,
                                 raw=data,
                             )
+                        for chunk in delta.get("tool_calls", []):
+                            index = chunk.get("index")
+                            if not isinstance(index, int):
+                                continue
+                            cached = tool_chunks.setdefault(index, {"id": "", "name": "", "arguments": ""})
+                            if chunk.get("id"):
+                                cached["id"] = chunk["id"]
+                            function = chunk.get("function", {})
+                            if function.get("name"):
+                                cached["name"] = function["name"]
+                            if function.get("arguments"):
+                                cached["arguments"] += function["arguments"]
 
+                for index in sorted(tool_chunks):
+                    call = _build_tool_call(tool_chunks[index])
+                    if isinstance(call, ToolCall):
+                        yield StreamFrame(type="tool_call", tool_call=call)
+                    else:
+                        yield StreamFrame(type="error", text=call)
                 # 如果循环正常结束但未收到 [DONE]，仍然发送完成信号
                 yield StreamFrame(type="done")
 
@@ -161,6 +196,17 @@ def _summarize_error(body: bytes) -> str:
         pass
     text = body.decode("utf-8", errors="replace")[:200]
     return text
+
+
+def _build_tool_call(chunk: dict[str, str]) -> ToolCall | str:
+    """将 OpenAI 的分片参数组合为完整工具调用或可展示的错误。"""
+    try:
+        arguments = json.loads(chunk["arguments"])
+    except json.JSONDecodeError as exc:
+        return f"工具调用参数不是有效 JSON（{chunk.get('name', 'unknown')}）: {exc}"
+    if not isinstance(arguments, dict) or not chunk["id"] or not chunk["name"]:
+        return "工具调用缺少 id、名称或对象类型参数"
+    return ToolCall(id=chunk["id"], name=chunk["name"], arguments=arguments)
 
 
 # ── 注册 ────────────────────────────────────────────────────────────────────
