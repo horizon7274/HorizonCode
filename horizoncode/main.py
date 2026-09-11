@@ -10,7 +10,8 @@ import logging
 import sys
 from pathlib import Path
 
-from horizoncode.config import load_config, get_active_profile, USER_CONFIG_DIR
+from horizoncode.config import load_config, get_active_profile, get_agent_settings, USER_CONFIG_DIR
+from horizoncode.agent.loop import AgentLoop
 from horizoncode.providers.base import get_provider
 from horizoncode.history import HistoryManager
 from horizoncode.tui.app import HorizonTUI
@@ -103,16 +104,23 @@ async def _run_app(config_path: Path | None, verbose: bool) -> None:
         print(f"Provider 错误: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    # 3. 初始化历史管理器
+    # 3. 初始化历史管理器与 Agent 内核
     history = HistoryManager()
     tools = create_default_registry(Path.cwd())
-
-    # 4. 运行 TUI
-    tui = HorizonTUI(
+    agent_settings = get_agent_settings(config)
+    agent_loop = AgentLoop(
         provider=provider,
+        registry=tools,
+        history=history,
+        max_iterations=agent_settings["max_iterations"],
+    )
+    agent_loop.set_model(profile["model"])
+
+    # 4. 运行 TUI（订阅 Agent 事件流渲染）
+    tui = HorizonTUI(
         history_manager=history,
         model=profile["model"],
-        tools=tools,
+        agent_loop=agent_loop,
     )
 
     try:
@@ -142,7 +150,8 @@ def main() -> None:
     try:
         asyncio.run(_run_app(args.config, args.verbose))
     except KeyboardInterrupt:
-        # 用户强制退出（多次 Ctrl+C）
+        # 仅处理发生在 TUI 外层（启动/退出阶段）的强制中断。
+        # Agent 思考期间的 Ctrl+C 已由 TUI 转为当前任务取消，不会到达这里。
         print("\n已中断。", file=sys.stderr)
         sys.exit(130)
 
