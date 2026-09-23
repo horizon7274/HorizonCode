@@ -43,7 +43,7 @@ logger = logging.getLogger(__name__)
 
 # ── 常量 ────────────────────────────────────────────────────────────────────
 
-# /do 切回执行模式时注入历史的接力提示词
+# /do 切回执行模式时使用的接力语义（由 AgentLoop 作为系统补充注入）
 DO_HANDOFF_PROMPT = "请按照上面的计划开始执行。"
 
 # prompt_toolkit 配色：绿色提示符，白色输入文本
@@ -226,9 +226,17 @@ class HorizonTUI:
             self._end_inline()
             round_in = event.round_usage.input_tokens
             round_out = event.round_usage.output_tokens
+            cache_parts = []
+            if event.round_usage.cache_read_input_tokens is not None:
+                cache_parts.append(f"缓存读 {event.round_usage.cache_read_input_tokens}")
+            if event.round_usage.cache_creation_input_tokens is not None:
+                cache_parts.append(f"缓存写 {event.round_usage.cache_creation_input_tokens}")
+            if event.round_usage.cached_input_tokens is not None:
+                cache_parts.append(f"命中 {event.round_usage.cached_input_tokens}")
+            cache_text = f"，{' / '.join(cache_parts)}" if cache_parts else ""
             self._console.print(
                 f"[dim]tokens ↑{round_in if round_in is not None else '?'} "
-                f"↓{round_out if round_out is not None else '?'}"
+                f"↓{round_out if round_out is not None else '?'}{cache_text}"
                 f"（累计 ↑{event.total_input} ↓{event.total_output}）[/dim]"
             )
         elif isinstance(event, FinishedEvent):
@@ -237,7 +245,15 @@ class HorizonTUI:
 
     def _render_finished(self, event: FinishedEvent) -> None:
         """渲染任务结束状态。"""
-        usage = f"[dim]（{event.iterations} 轮，tokens ↑{event.total_input} ↓{event.total_output}）[/dim]"
+        cache_parts = []
+        if event.total_cache_read:
+            cache_parts.append(f"缓存读 {event.total_cache_read}")
+        if event.total_cache_creation:
+            cache_parts.append(f"缓存写 {event.total_cache_creation}")
+        if event.total_cached:
+            cache_parts.append(f"命中 {event.total_cached}")
+        cache_text = f"，{' / '.join(cache_parts)}" if cache_parts else ""
+        usage = f"[dim]（{event.iterations} 轮，tokens ↑{event.total_input} ↓{event.total_output}{cache_text}）[/dim]"
 
         if event.reason == FINISH_COMPLETED:
             self._console.print(f"[dim]任务完成{usage}[/dim]")
@@ -348,8 +364,8 @@ class HorizonTUI:
     def _handle_do(self) -> None:
         """从计划模式切回全工具执行。
 
-        注入接力提示到历史后，由 run() 检测待执行标志并运行循环
-        （命令处理是同步的，实际循环在返回输入前同步驱动）。
+        设置一次性的系统级接力补充后，由 run() 检测待执行标志并运行循环
+        （命令处理是同步的，实际循环在返回输入前同步驱动）。接力内容不写入历史。
         """
         if not self._agent_loop.plan_mode:
             self._console.print(
@@ -358,7 +374,7 @@ class HorizonTUI:
             return
 
         self._agent_loop.plan_mode = False
-        self._history.add("user", DO_HANDOFF_PROMPT)
+        self._agent_loop.request_execution_handoff()
         self._pending_run = True
         self._console.print("[cyan]已切回执行模式，开始按计划执行……[/cyan]")
         self._console.print()

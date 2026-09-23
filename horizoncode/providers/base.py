@@ -7,6 +7,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import AsyncIterator, Any
 
+from horizoncode.prompts.models import SystemPrompt
 from horizoncode.tools.base import ToolCall
 
 # ── 数据结构 ────────────────────────────────────────────────────────────────
@@ -19,10 +20,53 @@ class Usage:
     属性:
         input_tokens: 输入（提示）Token 数；Provider 未提供时为 ``None``。
         output_tokens: 输出（补全）Token 数；Provider 未提供时为 ``None``。
+        cache_creation_input_tokens: 写入提示缓存的输入 Token 数。
+        cache_read_input_tokens: 从提示缓存读取的输入 Token 数。
+        cached_input_tokens: Provider 报告的通用缓存命中输入 Token 数。
+        cache_creation_5m_input_tokens: 五分钟缓存创建输入 Token 数（可选）。
+        cache_creation_1h_input_tokens: 一小时缓存创建输入 Token 数（可选）。
     """
 
     input_tokens: int | None = None
     output_tokens: int | None = None
+    cache_creation_input_tokens: int | None = None
+    cache_read_input_tokens: int | None = None
+    cached_input_tokens: int | None = None
+    cache_creation_5m_input_tokens: int | None = None
+    cache_creation_1h_input_tokens: int | None = None
+
+
+def merge_usage(current: Usage | None, update: Usage | None) -> Usage | None:
+    """按字段合并两次用量更新，缺失字段不会覆盖已有值。"""
+    if current is None:
+        return update
+    if update is None:
+        return current
+
+    def choose(new: int | None, old: int | None) -> int | None:
+        return new if new is not None else old
+
+    return Usage(
+        input_tokens=choose(update.input_tokens, current.input_tokens),
+        output_tokens=choose(update.output_tokens, current.output_tokens),
+        cache_creation_input_tokens=choose(
+            update.cache_creation_input_tokens,
+            current.cache_creation_input_tokens,
+        ),
+        cache_read_input_tokens=choose(
+            update.cache_read_input_tokens,
+            current.cache_read_input_tokens,
+        ),
+        cached_input_tokens=choose(update.cached_input_tokens, current.cached_input_tokens),
+        cache_creation_5m_input_tokens=choose(
+            update.cache_creation_5m_input_tokens,
+            current.cache_creation_5m_input_tokens,
+        ),
+        cache_creation_1h_input_tokens=choose(
+            update.cache_creation_1h_input_tokens,
+            current.cache_creation_1h_input_tokens,
+        ),
+    )
 
 
 @dataclass
@@ -30,13 +74,13 @@ class StreamFrame:
     """流式响应中的单个数据帧。
 
     属性:
-        type: 帧类型，取值为 ``"thinking"``、``"content"``、``"error"``、``"done"``。
+        type: 帧类型，取值为 ``"thinking"``、``"content"``、``"tool_call"``、``"error"``、``"done"``。
         text: 文本内容（``done`` 帧为空，``error`` 帧为错误信息）。
         raw: Provider 返回的原始数据（用于调试/日志）。
         usage: 本轮响应的 Token 用量，仅 ``done`` 帧可能携带。
     """
 
-    type: str  # "thinking" | "content" | "error" | "done"
+    type: str  # "thinking" | "content" | "tool_call" | "error" | "done"
     text: str = ""
     raw: object = None
     tool_call: ToolCall | None = None
@@ -78,7 +122,7 @@ class BaseProvider(ABC):
         messages: list[dict],
         model: str,
         tools: list[dict[str, Any]] | None = None,
-        system: str | None = None,
+        system: str | SystemPrompt | None = None,
     ) -> AsyncIterator[StreamFrame]:
         """对流式聊天请求，逐帧返回响应。
 
@@ -86,7 +130,7 @@ class BaseProvider(ABC):
             messages: 消息字典列表，每个字典含 ``role`` 和 ``content`` 键。
             model: 要使用的模型名称（Provider 相关）。
             tools: 已转换为当前 Provider 协议的工具声明；``None`` 表示不启用工具。
-            system: 可选的系统提示；Provider 会按各自协议的正确位置注入。
+            system: 可选的系统提示；可以是兼容旧调用的字符串，或带稳定内容与动态补充的结构化提示。
 
         Yields:
             :class:`StreamFrame` 实例，随响应生成逐个产出。

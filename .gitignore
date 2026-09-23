@@ -17,6 +17,9 @@ horizoncode.yaml
 AGENTS.md
 skills/
 
+# zcode
+.zcode/
+
 # vscode配置文件
 .vscode/
 

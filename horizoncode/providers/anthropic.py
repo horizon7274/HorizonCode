@@ -9,7 +9,14 @@ from typing import Any, AsyncIterator
 
 import httpx
 
-from horizoncode.providers.base import BaseProvider, StreamFrame, Usage, register_provider
+from horizoncode.prompts.models import SystemPrompt
+from horizoncode.providers.base import (
+    BaseProvider,
+    StreamFrame,
+    Usage,
+    merge_usage,
+    register_provider,
+)
 from horizoncode.tools.base import ToolCall
 
 logger = logging.getLogger(__name__)
@@ -62,7 +69,7 @@ class AnthropicProvider(BaseProvider):
         messages: list[dict],
         model: str,
         tools: list[dict[str, Any]] | None = None,
-        system: str | None = None,
+        system: str | SystemPrompt | None = None,
     ) -> AsyncIterator[StreamFrame]:
         """向 Anthropic Messages API 发起流式聊天请求。
 
@@ -91,8 +98,10 @@ class AnthropicProvider(BaseProvider):
                 "budget_tokens": THINKING_BUDGET_TOKENS,
             }
         if tools:
-            body["tools"] = tools
-        if system:
+            body["tools"] = _with_anthropic_cache_marker(tools) if isinstance(system, SystemPrompt) else tools
+        if isinstance(system, SystemPrompt):
+            body["system"] = _anthropic_system_blocks(system)
+        elif system:
             body["system"] = system
 
         try:
@@ -143,10 +152,7 @@ class AnthropicProvider(BaseProvider):
                     if isinstance(data, dict) and data.get("type") == "message_start":
                         message_usage = data.get("message", {}).get("usage")
                         if isinstance(message_usage, dict):
-                            usage = Usage(
-                                input_tokens=message_usage.get("input_tokens"),
-                                output_tokens=message_usage.get("output_tokens"),
-                            )
+                            usage = merge_usage(usage, _anthropic_usage(message_usage))
 
                     # 处理内容增量事件
                     if isinstance(data, dict) and data.get("type") == "content_block_start":
@@ -195,11 +201,7 @@ class AnthropicProvider(BaseProvider):
                         # message_delta 的 usage 是累计值，输出 Token 会在结尾更新
                         delta_usage = data.get("usage")
                         if isinstance(delta_usage, dict):
-                            usage = usage or Usage()
-                            if delta_usage.get("output_tokens") is not None:
-                                usage.output_tokens = delta_usage.get("output_tokens")
-                            if delta_usage.get("input_tokens") is not None:
-                                usage.input_tokens = delta_usage.get("input_tokens")
+                            usage = merge_usage(usage, _anthropic_usage(delta_usage))
 
                     # 处理 API 返回的错误事件
                     if isinstance(data, dict) and data.get("type") == "error":
@@ -235,6 +237,60 @@ class AnthropicProvider(BaseProvider):
 
 
 # ── 辅助函数 ────────────────────────────────────────────────────────────────
+
+
+def _anthropic_system_blocks(prompt: SystemPrompt) -> list[dict[str, Any]]:
+    """将结构化系统提示转换为 Anthropic system content blocks。"""
+    blocks: list[dict[str, Any]] = []
+    if prompt.stable:
+        blocks.append(
+            {
+                "type": "text",
+                "text": prompt.stable,
+                "cache_control": {"type": "ephemeral"},
+            }
+        )
+    blocks.extend(
+        {"type": "text", "text": supplement.render()}
+        for supplement in prompt.supplements
+    )
+    return blocks
+
+
+def _with_anthropic_cache_marker(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """复制工具声明并在最后一个稳定工具上设置缓存边界。"""
+    copied = [dict(tool) for tool in tools]
+    if copied:
+        copied[-1] = {**copied[-1], "cache_control": {"type": "ephemeral"}}
+    return copied
+
+
+def _anthropic_usage(raw: dict[str, Any]) -> Usage:
+    """从 Anthropic usage 对象提取统一缓存与 Token 字段。"""
+    creation = _optional_int(raw.get("cache_creation_input_tokens"))
+    creation_details = raw.get("cache_creation")
+    five_minutes = None
+    one_hour = None
+    if isinstance(creation_details, dict):
+        five_minutes = _optional_int(creation_details.get("ephemeral_5m_input_tokens"))
+        one_hour = _optional_int(creation_details.get("ephemeral_1h_input_tokens"))
+        if creation is None and (five_minutes is not None or one_hour is not None):
+            creation = (five_minutes or 0) + (one_hour or 0)
+    return Usage(
+        input_tokens=_optional_int(raw.get("input_tokens")),
+        output_tokens=_optional_int(raw.get("output_tokens")),
+        cache_creation_input_tokens=creation,
+        cache_read_input_tokens=_optional_int(raw.get("cache_read_input_tokens")),
+        cache_creation_5m_input_tokens=five_minutes,
+        cache_creation_1h_input_tokens=one_hour,
+    )
+
+
+def _optional_int(value: object) -> int | None:
+    """只接受 JSON 整数缓存字段，避免把异常值带入累计计算。"""
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    return None
 
 
 def _should_enable_thinking(model: str) -> bool:

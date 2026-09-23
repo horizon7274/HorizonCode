@@ -18,7 +18,7 @@ class ExecuteCommandTool(BaseTool):
 
     definition = ToolDefinition(
         name="execute_command",
-        description="在当前项目根目录执行 shell 命令。每一条命令都必须由用户确认。",
+        description="仅在专用文件/搜索工具无法完成任务时，作为后备在当前项目根目录执行 shell 命令；每一条命令都必须由用户确认。",
         input_schema={"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"], "additionalProperties": False},
     )
 

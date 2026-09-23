@@ -9,6 +9,7 @@ from horizoncode.providers.base import StreamFrame, Usage, get_provider
 from horizoncode.providers.anthropic import AnthropicProvider
 from horizoncode.providers.ollama import OllamaProvider
 from horizoncode.providers.openai import OpenAIProvider
+from horizoncode.prompts.models import SystemPrompt, SystemSupplement
 
 
 class TestStreamFrame:

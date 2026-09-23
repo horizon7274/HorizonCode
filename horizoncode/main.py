@@ -14,6 +14,7 @@ from horizoncode.config import load_config, get_active_profile, get_agent_settin
 from horizoncode.agent.loop import AgentLoop
 from horizoncode.providers.base import get_provider
 from horizoncode.history import HistoryManager
+from horizoncode.prompts.builder import PromptBuilder
 from horizoncode.tui.app import HorizonTUI
 from horizoncode.tools.registry import create_default_registry
 
@@ -106,13 +107,16 @@ async def _run_app(config_path: Path | None, verbose: bool) -> None:
 
     # 3. 初始化历史管理器与 Agent 内核
     history = HistoryManager()
-    tools = create_default_registry(Path.cwd())
+    project_root = Path.cwd()
+    tools = create_default_registry(project_root)
     agent_settings = get_agent_settings(config)
+    prompt_builder = PromptBuilder(project_root)
     agent_loop = AgentLoop(
         provider=provider,
         registry=tools,
         history=history,
         max_iterations=agent_settings["max_iterations"],
+        prompt_builder=prompt_builder,
     )
     agent_loop.set_model(profile["model"])
 

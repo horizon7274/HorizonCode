@@ -10,6 +10,7 @@ from typing import Any, AsyncIterator
 
 import httpx
 
+from horizoncode.prompts.models import SystemPrompt
 from horizoncode.providers.base import BaseProvider, StreamFrame, Usage, register_provider
 from horizoncode.tools.base import ToolCall
 
@@ -59,7 +60,7 @@ class OpenAIProvider(BaseProvider):
         messages: list[dict],
         model: str,
         tools: list[dict[str, Any]] | None = None,
-        system: str | None = None,
+        system: str | SystemPrompt | None = None,
     ) -> AsyncIterator[StreamFrame]:
         """向 OpenAI Chat Completions API 发起流式聊天请求。
 
@@ -71,7 +72,7 @@ class OpenAIProvider(BaseProvider):
 
         body = {
             "model": model,
-            "messages": ([{"role": "system", "content": system}] + messages if system else messages),
+            "messages": _openai_messages(messages, system),
             "max_tokens": DEFAULT_MAX_TOKENS,
             "stream": True,
             # 请求在流末尾附带 usage 统计的独立 chunk
@@ -131,8 +132,13 @@ class OpenAIProvider(BaseProvider):
                     raw_usage = data.get("usage")
                     if isinstance(raw_usage, dict):
                         usage = Usage(
-                            input_tokens=raw_usage.get("prompt_tokens"),
-                            output_tokens=raw_usage.get("completion_tokens"),
+                            input_tokens=_optional_int(
+                                raw_usage.get("prompt_tokens", raw_usage.get("input_tokens"))
+                            ),
+                            output_tokens=_optional_int(
+                                raw_usage.get("completion_tokens", raw_usage.get("output_tokens"))
+                            ),
+                            cached_input_tokens=_cached_tokens(raw_usage),
                         )
 
                     # 提取 content delta
@@ -193,6 +199,43 @@ class OpenAIProvider(BaseProvider):
 
 
 # ── 辅助函数 ────────────────────────────────────────────────────────────────
+
+
+def _openai_messages(
+    messages: list[dict],
+    system: str | SystemPrompt | None,
+) -> list[dict]:
+    """将旧字符串或结构化 system prompt 转成 OpenAI 消息列表。"""
+    if isinstance(system, SystemPrompt):
+        system_messages: list[dict] = []
+        if system.stable:
+            system_messages.append({"role": "system", "content": system.stable})
+        system_messages.extend(
+            {"role": "system", "content": supplement.render()}
+            for supplement in system.supplements
+        )
+        return system_messages + messages
+    if system:
+        return [{"role": "system", "content": system}] + messages
+    return messages
+
+
+def _cached_tokens(raw_usage: dict[str, Any]) -> int | None:
+    """兼容 Chat Completions 与代理响应中的缓存命中字段。"""
+    for details_key in ("prompt_tokens_details", "input_tokens_details"):
+        details = raw_usage.get(details_key)
+        if isinstance(details, dict):
+            value = _optional_int(details.get("cached_tokens"))
+            if value is not None:
+                return value
+    return _optional_int(raw_usage.get("cached_tokens"))
+
+
+def _optional_int(value: object) -> int | None:
+    """只接受 JSON 整数用量，避免异常值破坏累计计算。"""
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    return None
 
 
 def _summarize_error(body: bytes) -> str:

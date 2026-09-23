@@ -19,7 +19,7 @@ class ReadFileTool(BaseTool):
 
     definition = ToolDefinition(
         name="read_file",
-        description="读取项目根目录内的 UTF-8 文本文件。需要时用 start_line 和 end_line 限定行范围。",
+        description="读取项目根目录内的 UTF-8 文本文件，是检查已有文件内容的专用工具；修改已有文件前必须先读取最新内容。需要时用 start_line 和 end_line 限定行范围。",
         input_schema={
             "type": "object",
             "properties": {
@@ -81,7 +81,7 @@ class WriteFileTool(BaseTool):
 
     definition = ToolDefinition(
         name="write_file",
-        description="以 UTF-8 文本覆盖写入项目根目录内的文件。父目录必须已经存在。",
+        description="以 UTF-8 文本覆盖写入项目根目录内的文件。新建文件可以直接使用；覆盖已有文件前应先用 read_file 读取最新内容。父目录必须已经存在。",
         input_schema={
             "type": "object",
             "properties": {"path": {"type": "string"}, "content": {"type": "string"}},
@@ -127,7 +127,7 @@ class EditFileTool(BaseTool):
 
     definition = ToolDefinition(
         name="edit_file",
-        description="在项目内 UTF-8 文件中将 old_text 的唯一出现替换为 new_text。old_text 必须恰好匹配一次。",
+        description="在项目内 UTF-8 文件中将 old_text 的唯一出现替换为 new_text。编辑已有文件前必须先用 read_file 读取最新内容；old_text 必须恰好匹配一次。",
         input_schema={
             "type": "object",
             "properties": {"path": {"type": "string"}, "old_text": {"type": "string"}, "new_text": {"type": "string"}},

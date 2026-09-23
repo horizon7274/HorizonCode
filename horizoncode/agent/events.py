@@ -73,11 +73,18 @@ class UsageEvent(AgentEvent):
     属性:
         round_usage: 本轮响应的用量（Provider 未提供时字段为 None）。
         total_input / total_output: 整个任务累计的输入/输出 Token。
+        total_cache_creation / total_cache_read / total_cached: 整个任务累计的缓存 Token。
     """
 
     round_usage: Usage
     total_input: int = 0
     total_output: int = 0
+    total_cache_creation: int = 0
+    total_cache_read: int = 0
+    total_cached: int = 0
+    total_cache_creation: int = 0
+    total_cache_read: int = 0
+    total_cached: int = 0
 
 
 @dataclass
@@ -95,3 +102,6 @@ class FinishedEvent(AgentEvent):
     detail: str = ""
     total_input: int = 0
     total_output: int = 0
+    total_cache_creation: int = 0
+    total_cache_read: int = 0
+    total_cached: int = 0

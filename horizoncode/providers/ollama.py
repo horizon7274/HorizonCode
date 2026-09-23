@@ -6,6 +6,7 @@ from typing import Any, AsyncIterator
 
 import httpx
 
+from horizoncode.prompts.models import SystemPrompt
 from horizoncode.providers.base import BaseProvider, StreamFrame, Usage, register_provider
 from horizoncode.tools.base import ToolCall
 
@@ -46,7 +47,7 @@ class OllamaProvider(BaseProvider):
         messages: list[dict],
         model: str,
         tools: list[dict[str, Any]] | None = None,
-        system: str | None = None,
+        system: str | SystemPrompt | None = None,
     ) -> AsyncIterator[StreamFrame]:
         """调用 Ollama 原生聊天接口并逐帧返回模型输出。
 
@@ -58,7 +59,7 @@ class OllamaProvider(BaseProvider):
         """
         body: dict[str, Any] = {
             "model": model,
-            "messages": ([{"role": "system", "content": system}] + messages if system else messages),
+            "messages": _ollama_messages(messages, system),
             "stream": True,
         }
         if tools:
@@ -142,6 +143,20 @@ class OllamaProvider(BaseProvider):
         if self._client is not None:
             await self._client.aclose()
             self._client = None
+
+
+def _ollama_messages(
+    messages: list[dict],
+    system: str | SystemPrompt | None,
+) -> list[dict]:
+    """将结构化系统提示合并为 Ollama 首条 system 消息。"""
+    if isinstance(system, SystemPrompt):
+        if system.as_text():
+            return [{"role": "system", "content": system.as_text()}] + messages
+        return messages
+    if system:
+        return [{"role": "system", "content": system}] + messages
+    return messages
 
 
 def _build_tool_call(tool_call: object, index: int) -> ToolCall | str:

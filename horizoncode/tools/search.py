@@ -21,7 +21,7 @@ class GlobFilesTool(BaseTool):
 
     definition = ToolDefinition(
         name="glob_files",
-        description="按 glob 模式列出项目根目录内的文件，例如 horizoncode/**/*.py。",
+        description="按 glob 模式列出项目根目录内的文件；发现文件名和目录时优先使用本专用工具，例如 horizoncode/**/*.py。",
         input_schema={"type": "object", "properties": {"pattern": {"type": "string"}}, "required": ["pattern"], "additionalProperties": False},
     )
 
@@ -57,7 +57,7 @@ class GrepCodeTool(BaseTool):
 
     definition = ToolDefinition(
         name="grep_code",
-        description="搜索项目内 UTF-8 文本文件，返回匹配所在的文件、行号、行文本和匹配位置。",
+        description="搜索项目内 UTF-8 文本文件；搜索代码内容时优先使用本专用工具，返回匹配所在的文件、行号、行文本和匹配位置。",
         input_schema={
             "type": "object",
             "properties": {"pattern": {"type": "string"}, "regex": {"type": "boolean", "default": False}},

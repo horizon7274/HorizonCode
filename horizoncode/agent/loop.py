@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import AsyncIterator
 
 from horizoncode.agent.collector import RoundState, StreamCollector
@@ -25,6 +26,8 @@ from horizoncode.agent.events import (
 )
 from horizoncode.agent.scheduler import SchedulerOutcome, ToolScheduler
 from horizoncode.history import HistoryManager
+from horizoncode.prompts.builder import PromptBuilder
+from horizoncode.prompts.models import SystemPrompt
 from horizoncode.providers.base import BaseProvider, Usage
 from horizoncode.tools.base import ConfirmationCallback, ToolResult
 from horizoncode.tools.registry import ToolRegistry
@@ -68,6 +71,7 @@ class AgentLoop:
         max_iterations: int = 25,
         unknown_tool_limit: int = UNKNOWN_TOOL_LIMIT,
         confirm: ConfirmationCallback | None = None,
+        prompt_builder: PromptBuilder | None = None,
     ) -> None:
         """初始化 Agent 循环。
 
@@ -78,11 +82,14 @@ class AgentLoop:
             max_iterations: 迭代上限（兜底安全网），达到后强制终止。
             unknown_tool_limit: 连续（任务内累计）调用未注册工具的终止阈值。
             confirm: 透传给工具的确认回调。
+            prompt_builder: 结构化系统提示构建器；未提供时使用当前目录。
         """
         self._provider = provider
         self._registry = registry
         self._history = history
         self._model: str = ""
+        self._prompt_builder = prompt_builder or PromptBuilder(Path.cwd())
+        self._execution_handoff_pending = False
         self._max_iterations = max(1, max_iterations)
         self._unknown_tool_limit = max(1, unknown_tool_limit)
         # 确认回调公开为属性，界面层在构造后注入（如命令执行的 y/N 确认）
@@ -94,12 +101,22 @@ class AgentLoop:
         """设置本轮会话使用的模型名称（在 ``run`` 之前调用）。"""
         self._model = model
 
+    def request_execution_handoff(self) -> None:
+        """请求下一次任务注入一次性的计划执行接力提示。"""
+        self._execution_handoff_pending = True
+
     async def run(self) -> AsyncIterator[AgentEvent]:
         """运行自主循环，逐个产出过程事件，以 :class:`FinishedEvent` 结尾。"""
         protocol = self._provider.protocol
         collector = StreamCollector(self.cancel_event)
+        plan_mode_snapshot = self.plan_mode
+        handoff = self._execution_handoff_pending
+        self._execution_handoff_pending = False
         total_input = 0
         total_output = 0
+        total_cache_creation = 0
+        total_cache_read = 0
+        total_cached = 0
         unknown_total = 0
         iterations_done = 0
 
@@ -111,6 +128,9 @@ class AgentLoop:
                     iterations_done,
                     total_input=total_input,
                     total_output=total_output,
+                    total_cache_creation=total_cache_creation,
+                    total_cache_read=total_cache_read,
+                    total_cached=total_cached,
                 )
                 return
 
@@ -118,12 +138,17 @@ class AgentLoop:
             yield IterationEvent(iteration, self._max_iterations)
 
             messages = self._history.get_api_messages(protocol)
-            tools = self._registry.definitions_for(protocol, read_only=self.plan_mode)
-            system = PLAN_MODE_SYSTEM_PROMPT if self.plan_mode else None
+            tools = self._registry.definitions_for(protocol, read_only=plan_mode_snapshot)
+            prompt = self._prompt_builder.build(
+                model=self._model,
+                plan_mode=plan_mode_snapshot,
+                round_number=iteration,
+                handoff=handoff and iteration == 1,
+            )
 
             state = RoundState()
             async for event in collector.collect(
-                self._provider.stream_chat(messages, self._model, tools=tools, system=system),
+                self._provider.stream_chat(messages, self._model, tools=tools, system=prompt),
                 state,
             ):
                 yield event
@@ -132,7 +157,17 @@ class AgentLoop:
             if state.usage is not None:
                 total_input += state.usage.input_tokens or 0
                 total_output += state.usage.output_tokens or 0
-                yield UsageEvent(state.usage, total_input, total_output)
+                total_cache_creation += state.usage.cache_creation_input_tokens or 0
+                total_cache_read += state.usage.cache_read_input_tokens or 0
+                total_cached += state.usage.cached_input_tokens or 0
+                yield UsageEvent(
+                    state.usage,
+                    total_input,
+                    total_output,
+                    total_cache_creation,
+                    total_cache_read,
+                    total_cached,
+                )
 
             # 收集中途被取消：半截内容照常入历史，未执行的调用以取消结果成对写入
             if state.cancelled:
@@ -142,6 +177,9 @@ class AgentLoop:
                     iterations_done,
                     total_input=total_input,
                     total_output=total_output,
+                    total_cache_creation=total_cache_creation,
+                    total_cache_read=total_cache_read,
+                    total_cached=total_cached,
                 )
                 return
 
@@ -153,6 +191,9 @@ class AgentLoop:
                     detail=state.error,
                     total_input=total_input,
                     total_output=total_output,
+                    total_cache_creation=total_cache_creation,
+                    total_cache_read=total_cache_read,
+                    total_cached=total_cached,
                 )
                 return
 
@@ -168,6 +209,9 @@ class AgentLoop:
                     iterations_done,
                     total_input=total_input,
                     total_output=total_output,
+                    total_cache_creation=total_cache_creation,
+                    total_cache_read=total_cache_read,
+                    total_cached=total_cached,
                 )
                 return
 
@@ -177,7 +221,7 @@ class AgentLoop:
                 self._registry,
                 self._history,
                 confirm=self.confirm,
-                plan_mode=self.plan_mode,
+                plan_mode=plan_mode_snapshot,
                 cancel_event=self.cancel_event,
             )
             outcome = SchedulerOutcome()
@@ -192,6 +236,9 @@ class AgentLoop:
                     detail=f"模型累计 {unknown_total} 次调用未注册工具",
                     total_input=total_input,
                     total_output=total_output,
+                    total_cache_creation=total_cache_creation,
+                    total_cache_read=total_cache_read,
+                    total_cached=total_cached,
                 )
                 return
 
@@ -202,6 +249,9 @@ class AgentLoop:
                     iterations_done,
                     total_input=total_input,
                     total_output=total_output,
+                    total_cache_creation=total_cache_creation,
+                    total_cache_read=total_cache_read,
+                    total_cached=total_cached,
                 )
                 return
 
