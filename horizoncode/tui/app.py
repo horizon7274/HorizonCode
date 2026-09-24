@@ -228,9 +228,13 @@ class HorizonTUI:
             round_out = event.round_usage.output_tokens
             cache_parts = []
             if event.round_usage.cache_read_input_tokens is not None:
-                cache_parts.append(f"缓存读 {event.round_usage.cache_read_input_tokens}")
+                cache_parts.append(
+                    f"缓存读 {event.round_usage.cache_read_input_tokens}"
+                )
             if event.round_usage.cache_creation_input_tokens is not None:
-                cache_parts.append(f"缓存写 {event.round_usage.cache_creation_input_tokens}")
+                cache_parts.append(
+                    f"缓存写 {event.round_usage.cache_creation_input_tokens}"
+                )
             if event.round_usage.cached_input_tokens is not None:
                 cache_parts.append(f"命中 {event.round_usage.cached_input_tokens}")
             cache_text = f"，{' / '.join(cache_parts)}" if cache_parts else ""
@@ -368,9 +372,7 @@ class HorizonTUI:
         （命令处理是同步的，实际循环在返回输入前同步驱动）。接力内容不写入历史。
         """
         if not self._agent_loop.plan_mode:
-            self._console.print(
-                Text("当前不在计划模式，无需 /do。", style="yellow")
-            )
+            self._console.print(Text("当前不在计划模式，无需 /do。", style="yellow"))
             return
 
         self._agent_loop.plan_mode = False
@@ -382,12 +384,47 @@ class HorizonTUI:
     # ── 界面渲染 ─────────────────────────────────────────────────────────
 
     def _print_welcome(self) -> None:
-        """打印欢迎面板。"""
-        content = Text()
-        content.append("HorizonCode v0.2.0\n", style="bold white")
-        content.append(f"Model: {self._model}\n", style="dim")
-        content.append("/help 查看命令  /plan 计划模式  /do 执行计划  /exit 退出", style="dim")
-        self._console.print(Panel(content, border_style="bold green", padding=(0, 1)))
+        """打印带渐变 Logo 的欢迎面板。"""
+        # HORIZON Unicode Logo（每行 55 字符宽）
+        logo = [
+            "██╗  ██╗ ██████╗ ██████╗ ██╗███████╗ ██████╗ ███╗   ██╗",
+            "██║  ██║██╔═══██╗██╔══██╗██║╚══███╔╝██╔═══██╗████╗  ██║",
+            "███████║██║   ██║██████╔╝██║  ███╔╝ ██║   ██║██╔██╗ ██║",
+            "██╔══██║██║   ██║██╔══██╗██║ ███╔╝  ██║   ██║██║╚██╗██║",
+            "██║  ██║╚██████╔╝██║  ██║██║███████╗╚██████╔╝██║ ╚████║",
+            "╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝╚═╝╚══════╝ ╚═════╝ ╚═╝  ╚═══╝",
+        ]
+        # 地平线日落渐变：黄 → 橙 → 珊瑚 → 粉 → 紫 → 靛
+        sunset = ["#ffe066", "#ffb347", "#ff7f50", "#ff5f87", "#c75fff", "#7d5fff"]
+
+        content = Text(justify="left")
+
+        # 终端够宽才画 Logo，窄终端自动降级为纯文字，避免折行
+        if self._console.width >= 65:
+            for line, color in zip(logo, sunset):
+                content.append(line, style=f"bold {color}")
+                content.append("\n")
+            content.append("\n")
+
+        content.append("HorizonCode", style="bold white")
+        content.append("  v0.2.0\n", style="dim")
+        content.append(f"Model: {self._model}\n\n", style="dim")
+
+        shortcuts = [
+            ("/help", "查看命令"),
+            ("/plan", "计划模式"),
+            ("/do", "执行计划"),
+            ("/exit", "退出"),
+        ]
+        for i, (key, desc) in enumerate(shortcuts):
+            content.append(key, style="bold cyan")
+            content.append(f" {desc}", style="dim")
+            if i < len(shortcuts) - 1:
+                content.append("   ")
+
+        self._console.print(
+            Panel(content, border_style="grey35", padding=(1, 2))
+        )
 
     def _print_help(self) -> None:
         """打印帮助信息。"""
